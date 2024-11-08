@@ -5,6 +5,7 @@ import threading
 import shlex
 import hashlib
 import random
+from collections import defaultdict
 
 stop_event = threading.Event()
 
@@ -12,8 +13,6 @@ def generate_peer_id():
     """Tạo peer_id ngẫu nhiên 160-bit."""
     return hashlib.sha1(str(random.getrandbits(160)).encode()).hexdigest()
 
-# Biến toàn cục để theo dõi số lượng pieces đã tải
-pieces_downloaded = 0
 peers_id = generate_peer_id()
 lock = threading.Lock()
 
@@ -80,19 +79,7 @@ def check_local_piece_files(file_name):
     else:
         return False
 
-def handle_publish_piece(sock, peers_port, pieces, file_name,file_size,piece_size):
-    pieces_hash = create_pieces_string(pieces)
-    user_input_num_piece = input( f"File {file_name} have {pieces}\n piece: {pieces_hash}. \nPlease select num piece in file to publish:" )
-    num_order_in_file = shlex.split(user_input_num_piece) 
-    piece_hash=[]
-    print("You was selected: " )
-    for i in num_order_in_file:
-        index = pieces.index(f"{file_name}_piece{i}")
-        piece_hash.append(pieces_hash[index])
-        print (f"Number {i} : {pieces_hash[index]}")
-    publish_piece_file(sock,peers_port,file_name,file_size, piece_hash,piece_size,num_order_in_file)
-
-def publish_piece_file(sock,peers_port,file_name,file_size, piece_hash,piece_size,num_order_in_file):
+def handle_publish_file(sock, peers_port,file_name,file_size,number_of_pieces):
     global peers_id
     peers_hostname = socket.gethostname()
     command = {
@@ -102,14 +89,53 @@ def publish_piece_file(sock,peers_port,file_name,file_size, piece_hash,piece_siz
         "peers_hostname":peers_hostname,
         "file_name":file_name,
         "file_size":file_size,
+        "number_of_pieces": number_of_pieces,
+    }
+    # shared_piece_files_dir.append(command)
+    sock.sendall(json.dumps(command).encode() + b'\n')
+    response = sock.recv(4096).decode()
+    print(response)
+
+
+def handle_upload_piece(sock, peers_port, pieces, file_name):
+    pieces_hash = create_pieces_string(pieces)
+    user_input_num_piece = input( f"File {file_name} have {pieces}\n piece: {pieces_hash}. \nPlease select num piece in file to upload:" )
+    num_order_in_file = shlex.split(user_input_num_piece) 
+    piece_hash=[]
+    print("You was selected: " )
+    for i in num_order_in_file:
+        index = pieces.index(f"{file_name}_piece{i}")
+        piece_hash.append(pieces_hash[index])
+        print (f"Number {i} : {pieces_hash[index]}")
+    upload_piece_file(sock,peers_port,file_name, piece_hash, num_order_in_file)
+
+def upload_piece_file(sock,peers_port,file_name, piece_hash, num_order_in_file):
+    global peers_id
+    peers_hostname = socket.gethostname()
+    command = {
+        "action": "upload",
+        "peers_id": peers_id,
+        "peers_port": peers_port,
+        "peers_hostname":peers_hostname,
+        "file_name":file_name,
         "piece_hash":piece_hash,
-        "piece_size":piece_size,
         "num_order_in_file":num_order_in_file,
     }
     # shared_piece_files_dir.append(command)
     sock.sendall(json.dumps(command).encode() + b'\n')
     response = sock.recv(4096).decode()
     print(response)
+
+def get_total_pieces_needed(torrent_file_info):
+    pieces_count = defaultdict(int)
+    # Đếm số mảnh của từng peer_id
+    for info in torrent_file_info:
+        peers_id = info['peers_id']
+        pieces_count[peers_id] += 1  
+    
+    # Lấy số lượng mảnh lớn nhất trong các peer_id
+    max_pieces = max(pieces_count.values()) if pieces_count else 0
+    return max_pieces
 
 def request_file_from_peer(peers_ip, peer_port, file_name, piece_hash, num_order_in_file):
     peer_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -137,64 +163,6 @@ def request_file_from_peer(peers_ip, peer_port, file_name, piece_hash, num_order
     finally:
         peer_sock.close()
 
-def download_from_peer(peer_info, total_pieces_needed):
-    global pieces_downloaded
-
-    peer_ip = peer_info['peers_ip']
-    peer_port = peer_info['peers_port']
-    piece_size = peer_info['piece_size']
-    num_order_in_file = peer_info['num_order_in_file']
-
-    try:
-        with socket.create_connection((peer_ip, peer_port), timeout=10) as peer_socket:
-            request_data = json.dumps({
-                'action': 'download',
-                'piece_size': piece_size,
-                'num_order_in_file': num_order_in_file
-            })
-            peer_socket.sendall(request_data.encode())
-
-            data = peer_socket.recv(4096)
-            if data:
-                with open(f"downloaded_piece_{num_order_in_file}.part", "wb") as f:
-                    f.write(data)
-                print(f"Đã nhận dữ liệu từ {peer_ip}:{peer_port}")
-
-                # Cập nhật biến đếm một cách an toàn
-                with lock:
-                    pieces_downloaded += 1
-                    # Kiểm tra xem đã đủ số pieces chưa
-                    if pieces_downloaded >= total_pieces_needed:
-                        print("Đã tải đủ các phần dữ liệu của file, dừng lại.")
-                        return True
-            else:
-                print(f"Không nhận được dữ liệu từ {peer_ip}:{peer_port}")
-
-    except Exception as e:
-        print(f"Lỗi khi tải từ peer {peer_ip}:{peer_port} - {e}")
-
-    return False
-
-# Hàm để khởi động tải xuống từ danh sách các peer đã sắp xếp
-def start_downloading(active_sorted_peers_info, total_pieces_needed):
-    global pieces_downloaded
-    threads = []
-
-    for peer_info in active_sorted_peers_info:
-        if pieces_downloaded >= total_pieces_needed:
-            print("Đã tải đủ số pieces cần thiết, ngừng tải xuống.")
-            pieces_downloaded = 0
-            break
-
-        thread = threading.Thread(target=download_from_peer, args=(peer_info, total_pieces_needed))
-        thread.start()
-        threads.append(thread)
-
-    for thread in threads:
-        thread.join()
-
-    print("Quá trình tải xuống hoàn tất hoặc đã đủ các phần của file.")
-
 def fetch_file(sock,peers_port,file_name, piece_hash, num_order_in_file):
     peers_hostname = socket.gethostname()
     command = {
@@ -207,53 +175,56 @@ def fetch_file(sock,peers_port,file_name, piece_hash, num_order_in_file):
         "num_order_in_file":num_order_in_file,
     } 
 
-    total_pieces_needed = len(piece_hash)
-
     # command = {"action": "fetch", "fname": fname}
     sock.sendall(json.dumps(command).encode() + b'\n')
     response = json.loads(sock.recv(4096).decode())
 
-    if isinstance(response, list):
-        active_sorted_peers_info = response['active_sorted_peers_info']
-        
+    active_peers = response.get('active_peers', [])  # Lấy danh sách peers
+    torrent_file_info = response.get('torrent_file_info', [])  # Lấy thông tin torrent
+    
+    if isinstance(active_peers, list):
         # Hiển thị danh sách các peer có thể tải
         host_info_str = "\n".join([
-            f"Peer: {peer_info['peers_hostname']} IP: {peer_info['peers_ip']}:{peer_info['peers_port']} - Piece number: {peer_info['num_order_in_file']}"
-            for peer_info in active_sorted_peers_info
+            f"Peer: {peer_info['peers_hostname']} IP: {peer_info['peers_ip']}:{peer_info['peers_port']}"
+            for peer_info in active_peers
         ])
-        print(f"Peers with the file {file_name}:\n{host_info_str}")
-        
-        #Khởi động quá trình tải các piece từ các peer gần nhất
-        start_downloading(active_sorted_peers_info, total_pieces_needed)
+        print(f"Hosts with the file {file_name}:\n{host_info_str}")
+        # Tải từng piece từ các peer cho đến khi đủ
+        pieces_downloaded = set()  # Lưu các piece đã tải
+        total_pieces_needed = 0  # Tổng số lượng piece cần tải
 
-    if len(active_sorted_peers_info) >= 1:
-        # Lựa chọn host từ người dùng
-        chosen_info = input("Enter the piece numbers of hosts to download from (separate by spaces): ")
-        chosen_info_parts = chosen_info.split()
-        
-        # Kiểm tra và tải các phần từ các host đã chọn
-        for piece_num in chosen_info_parts:
-            host_entry = next((peer for peer in active_sorted_peers_info if peer.get('num_order_in_file') == piece_num), None)
-            if host_entry:
-                request_file_from_peer(
-                    host_entry['peers_ip'],
-                    host_entry['peers_port'],
-                    host_entry['file_name'],
-                    host_entry['piece_hash'],
-                    host_entry['num_order_in_file']
-                )
-            else:
-                print(f"Invalid piece number entered: {piece_num}")
+        # Duyệt qua các peer để tải từng piece
+        for peer_info in active_peers:
+            # Lấy các phần liên quan đến peer hiện tại từ torrent_file_info
+            pieces_for_peer = list(filter(lambda piece: piece['peers_id'] == peer_info['peers_id'], torrent_file_info))
+            total_pieces_needed = get_total_pieces_needed(torrent_file_info)
 
-        # Kiểm tra nếu đã tải đủ các piece, thì ghép lại thành file
-        pieces = check_local_piece_files(file_name)
-        if len(pieces) == total_pieces_needed:
-            merge_pieces_into_file(pieces, file_name)
-            print(f"File {file_name} đã được tải xong và hợp nhất.")
-        else:
-            print(f"File {file_name} vẫn chưa được tải đủ. Còn thiếu {total_pieces_needed - len(pieces)} pieces.")
+            for piece in pieces_for_peer:
+                file_name = piece['file_name']
+                piece_hash = piece['piece_hash']
+                num_order_in_file = piece['num_order_in_file']
+                if num_order_in_file not in pieces_downloaded:
+                    print(f"Đang tải phần {num_order_in_file} từ peer {peer_info['peers_hostname']}...")
+                    request_file_from_peer(
+                        peer_info['peers_ip'], 
+                        peer_info['peers_port'], 
+                        file_name, 
+                        piece_hash, 
+                        num_order_in_file
+                    )
+                    pieces_downloaded.add(num_order_in_file)
+                    # Kiểm tra xem đã đủ các piece chưa
+                    pieces = check_local_piece_files(file_name)  # Kiểm tra các phần đã tải xuống
+                    if len(pieces) == total_pieces_needed:  # Nếu đủ số lượng piece cần thiết
+                        merge_pieces_into_file(pieces, file_name)
+                        print(f"Đã tải đủ các piece và hoàn thành file: {file_name}")
+                        return  # Thoát khỏi hàm khi hoàn thành file
+
+        # Nếu không đủ piece
+        if len(pieces_downloaded) < total_pieces_needed:
+            print("Đã tải tất cả các peer nhưng vẫn chưa đủ các piece.")
     else:
-        print("Không có peer nào có file này hoặc phản hồi từ server không hợp lệ.")
+        print("Không nhận được thông tin về các peer hoạt động.")
     
 
 def send_piece_to_client(conn, piece):
@@ -320,9 +291,17 @@ def main(server_host, server_port, peers_port):
                     piece_size = 524288  # 524288 byte = 512KB
                     file_size = os.path.getsize(file_name)
                     pieces = split_file_into_pieces(file_name,piece_size)
-                    handle_publish_piece(sock, peers_port, pieces, file_name,file_size,piece_size)
+                    handle_publish_file(sock, peers_port,file_name,file_size,len(pieces))
+                else:
+                    print(f"Local file {file_name}/piece does not exist.")
+            elif len(command_parts) == 2 and command_parts[0].lower() == 'upload':
+                _,file_name = command_parts
+                if check_local_files(file_name):
+                    piece_size = 524288  # 524288 byte = 512KB
+                    pieces = split_file_into_pieces(file_name,piece_size)
+                    handle_upload_piece(sock, peers_port, pieces, file_name)
                 elif (pieces := check_local_piece_files(file_name)):
-                    handle_publish_piece(sock, peers_port, pieces, file_name,file_size,piece_size)
+                    handle_upload_piece(sock, peers_port, pieces, file_name)
                 else:
                     print(f"Local file {file_name}/piece does not exist.")
             elif len(command_parts) == 2 and command_parts[0].lower() == 'fetch':
@@ -345,7 +324,7 @@ def main(server_host, server_port, peers_port):
 
 if __name__ == "__main__":
     # Replace with your server's IP address and port number
-    SERVER_HOST = '192.168.61.179'
+    SERVER_HOST = '192.168.8.114'
     SERVER_PORT = 65432
     CLIENT_PORT = 65433
     main(SERVER_HOST, SERVER_PORT,CLIENT_PORT)

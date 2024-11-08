@@ -79,19 +79,7 @@ def check_local_piece_files(file_name):
     else:
         return False
 
-def handle_publish_piece(sock, peers_port, pieces, file_name,file_size,piece_size):
-    pieces_hash = create_pieces_string(pieces)
-    user_input_num_piece = input( f"File {file_name} have {pieces}\n piece: {pieces_hash}. \nPlease select num piece in file to publish:" )
-    num_order_in_file = shlex.split(user_input_num_piece) 
-    piece_hash=[]
-    print("You was selected: " )
-    for i in num_order_in_file:
-        index = pieces.index(f"{file_name}_piece{i}")
-        piece_hash.append(pieces_hash[index])
-        print (f"Number {i} : {pieces_hash[index]}")
-    publish_piece_file(sock,peers_port,file_name,file_size, piece_hash,piece_size,num_order_in_file)
-
-def publish_piece_file(sock,peers_port,file_name,file_size, piece_hash,piece_size,num_order_in_file):
+def handle_publish_file(sock, peers_port,file_name,file_size,number_of_pieces):
     global peers_id
     peers_hostname = socket.gethostname()
     command = {
@@ -101,8 +89,36 @@ def publish_piece_file(sock,peers_port,file_name,file_size, piece_hash,piece_siz
         "peers_hostname":peers_hostname,
         "file_name":file_name,
         "file_size":file_size,
+        "number_of_pieces": number_of_pieces,
+    }
+    # shared_piece_files_dir.append(command)
+    sock.sendall(json.dumps(command).encode() + b'\n')
+    response = sock.recv(4096).decode()
+    print(response)
+
+
+def handle_upload_piece(sock, peers_port, pieces, file_name):
+    pieces_hash = create_pieces_string(pieces)
+    user_input_num_piece = input( f"File {file_name} have {pieces}\n piece: {pieces_hash}. \nPlease select num piece in file to upload:" )
+    num_order_in_file = shlex.split(user_input_num_piece) 
+    piece_hash=[]
+    print("You was selected: " )
+    for i in num_order_in_file:
+        index = pieces.index(f"{file_name}_piece{i}")
+        piece_hash.append(pieces_hash[index])
+        print (f"Number {i} : {pieces_hash[index]}")
+    upload_piece_file(sock,peers_port,file_name, piece_hash, num_order_in_file)
+
+def upload_piece_file(sock,peers_port,file_name, piece_hash, num_order_in_file):
+    global peers_id
+    peers_hostname = socket.gethostname()
+    command = {
+        "action": "upload",
+        "peers_id": peers_id,
+        "peers_port": peers_port,
+        "peers_hostname":peers_hostname,
+        "file_name":file_name,
         "piece_hash":piece_hash,
-        "piece_size":piece_size,
         "num_order_in_file":num_order_in_file,
     }
     # shared_piece_files_dir.append(command)
@@ -275,9 +291,17 @@ def main(server_host, server_port, peers_port):
                     piece_size = 524288  # 524288 byte = 512KB
                     file_size = os.path.getsize(file_name)
                     pieces = split_file_into_pieces(file_name,piece_size)
-                    handle_publish_piece(sock, peers_port, pieces, file_name,file_size,piece_size)
+                    handle_publish_file(sock, peers_port,file_name,file_size,len(pieces))
+                else:
+                    print(f"Local file {file_name}/piece does not exist.")
+            elif len(command_parts) == 2 and command_parts[0].lower() == 'upload':
+                _,file_name = command_parts
+                if check_local_files(file_name):
+                    piece_size = 524288  # 524288 byte = 512KB
+                    pieces = split_file_into_pieces(file_name,piece_size)
+                    handle_upload_piece(sock, peers_port, pieces, file_name)
                 elif (pieces := check_local_piece_files(file_name)):
-                    handle_publish_piece(sock, peers_port, pieces, file_name,file_size,piece_size)
+                    handle_upload_piece(sock, peers_port, pieces, file_name)
                 else:
                     print(f"Local file {file_name}/piece does not exist.")
             elif len(command_parts) == 2 and command_parts[0].lower() == 'fetch':
@@ -300,7 +324,7 @@ def main(server_host, server_port, peers_port):
 
 if __name__ == "__main__":
     # Replace with your server's IP address and port number
-    SERVER_HOST = '192.168.61.179'
+    SERVER_HOST = '192.168.8.114'
     SERVER_PORT = 65432
     CLIENT_PORT = 65434
     main(SERVER_HOST, SERVER_PORT,CLIENT_PORT)

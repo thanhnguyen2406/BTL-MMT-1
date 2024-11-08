@@ -6,6 +6,7 @@ import hashlib
 import mysql.connector
 from mysql.connector import Error
 import sys
+import json
 
 conn = None
 cur = None
@@ -23,7 +24,6 @@ try:
     )
 
     if conn.is_connected():
-        print("Kết nối thành công!")
         cur = conn.cursor()
         # Thực hiện các truy vấn SQL ở đây
 
@@ -37,50 +37,121 @@ def log_event(message):
 def xor_distance(id1, id2):
     return int(id1, 16) ^ int(id2, 16)
 
-def update_client_info_DHT(peer_id, hash_info, peers_ip, peers_port, peers_hostname):
+def update_client_info_DHT(peers_id, peers_ip, peers_port, peers_hostname):
 
     try:
         # Thêm hoặc cập nhật peer vào bảng DHT
         cur.execute("""
-            INSERT INTO DHT (peer_id, hash_info, peers_ip, peers_port, peers_hostname)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO DHT_peers (peer_id, peers_ip, peers_port, peers_hostname)
+            VALUES (%s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 peers_ip = VALUES(peers_ip),
                 peers_port = VALUES(peers_port),
                 peers_hostname = VALUES(peers_hostname)
-        """, (peer_id, hash_info, peers_ip, peers_port, peers_hostname))
+        """, (peers_id, peers_ip, peers_port, peers_hostname))
 
         # Commit các thay đổi
         conn.commit()
-        print(f"Thông tin peer đã được lưu với peer_id: {peer_id} và hash_info: {hash_info}")
 
     except mysql.connector.Error as e:
         print(f"Error in update_client_info_DHT: {e}")
         conn.rollback()
 
-def update_client_info_torrentFile(peers_id, file_name, file_size, piece_hash, piece_size, num_order_in_file):
+def update_client_info_torrentFile(hash_info, file_name, file_size, piece_size, number_of_pieces):
     try:
-        # Lưu thông tin file vào bảng torrent_file
-        for i in range(len(num_order_in_file)):
-            cur.execute("""
-                INSERT INTO torrent_file (peers_id, file_name, file_size, piece_hash, piece_size, num_order_in_file)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (peers_id, file_name, file_size, piece_hash[i], piece_size, num_order_in_file[i]))
-        
+        cur.execute("""
+            INSERT IGNORE INTO torrent_file (hash_info, file_name, file_size, piece_size, number_of_pieces)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (hash_info, file_name, file_size, piece_size, number_of_pieces))
+         
         # Commit các thay đổi
         conn.commit()
-        print(f"Thông tin file đã được lưu cho peer_id: {peers_id}")
 
     except mysql.connector.Error as e:
         print(f"Error in update_client_info_torrentFile: {e}")
         conn.rollback()
 
+def update_client_info_peerStorage(peer_id, piece_hash, hash_info, file_name, num_order_in_file):
+    try:
+        # Lưu thông tin vào bảng peer_storage
+        for i in range(len(piece_hash)):
+            cur.execute("""
+                INSERT IGNORE INTO peer_storage (peer_id, piece_hash, hash_info, file_name, num_order_in_file)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (peer_id, piece_hash[i], hash_info, file_name, num_order_in_file[i]))
+        
+        # Commit các thay đổi
+        conn.commit()
+        print(f"Thông tin đã được lưu cho peer_id: {peer_id} với hash_info: {hash_info}")
+
+    except mysql.connector.Error as e:
+        print(f"Error in update_client_info_peerStorage: {e}")
+        conn.rollback()
+
+def add_hash_info(peers_id, new_hash_info):
+    try:
+        # Lấy dữ liệu hash_info hiện tại từ bảng
+        cur.execute("""
+            SELECT hash_info FROM DHT_peers WHERE peer_id = %s
+        """, (peers_id,))
+        result = cur.fetchone()
+
+        # Kiểm tra nếu peer đã có hash_info
+        if result and result[0]:
+            # Chuyển đổi hash_info hiện tại thành list
+            existing_hash_info = json.loads(result[0])
+        else:
+            # Nếu không có dữ liệu hash_info, khởi tạo list rỗng
+            existing_hash_info = []
+
+        # Thêm giá trị mới vào danh sách hash_info
+        existing_hash_info.append(new_hash_info)
+
+        # Cập nhật lại cột hash_info với danh sách đã thêm
+        updated_hash_info = json.dumps(existing_hash_info)
+
+        # Cập nhật vào cơ sở dữ liệu
+        cur.execute("""
+            UPDATE DHT_peers
+            SET hash_info = %s
+            WHERE peer_id = %s
+        """, (updated_hash_info, peers_id))
+
+        # Commit các thay đổi
+        conn.commit()
+        print(f"Hash info đã được cập nhật cho peer_id: {peers_id}")
+
+    except mysql.connector.Error as e:
+        print(f"Error in add_hash_info: {e}")
+        conn.rollback()
+
+def delete_peer_from_DHT_peers(peer_id):
+    try:
+        # Xóa các bản ghi liên quan đến peer_id trong bảng peer_storage
+        cur.execute("""
+            DELETE FROM peer_storage
+            WHERE peer_id = %s
+        """, (peer_id,))
+        conn.commit()
+        
+        # Xóa thông tin peer khỏi bảng DHT_peers
+        cur.execute("""
+            DELETE FROM DHT_peers WHERE peer_id = %s
+        """, (peer_id,))
+        
+        # Commit các thay đổi
+        conn.commit()
+        print(f"Peer với peer_id: {peer_id} đã được xóa khỏi cả peer_storage và DHT_peers.")
+    
+    except mysql.connector.Error as e:
+        print(f"Error in deleting peer data: {e}")
+        conn.rollback()
 
 active_connections = {}  
 host_files = {}
 
 def client_handler(conn, addr):
-    client_peers_hostname = None
+    peers_id = None
     try:
         while True:
             data = conn.recv(4096).decode()
@@ -99,28 +170,38 @@ def client_handler(conn, addr):
             piece_hash = command['piece_hash'] if 'piece_hash' in command else ""
             piece_size = command['piece_size'] if 'piece_size' in command else ""
             num_order_in_file = command['num_order_in_file'] if 'num_order_in_file' in command else ""
+            number_of_pieces = command['number_of_pieces'] if 'number_of_pieces' in command else ""
             
+            # hash_info = hashlib.sha1(f"{file_name}{piece_hash}{len(num_order_in_file)}".encode()).hexdigest()
             hash_info = hashlib.sha1(f"{file_name}".encode()).hexdigest()
 
             if command.get('action') == 'introduce':
-                active_connections[peers_hostname] = conn
+                # active_connections[peers_hostname] = conn
+                update_client_info_DHT(peers_id, peers_ip, peers_port, peers_hostname) # addr[0] is the IP address
                 log_event(f"Connection established with {peers_hostname}/{peers_ip}:{peers_port})")
 
             elif command['action'] == 'publish':
                 # peers_ip,peers_port,peers_hostname,file_name,piece_hash
-                log_event(f"Updating client info in database for hostname: {peers_hostname}/{peers_ip}:{peers_port}")
-                update_client_info_DHT(peers_id, hash_info,peers_ip,peers_port, peers_hostname)  # addr[0] is the IP address
-                update_client_info_torrentFile(peers_id, file_name, file_size, piece_hash, piece_size, num_order_in_file)
-                log_event(f"Database update complete for hostname: {peers_hostname}/{peers_ip}:{peers_port}")
-                conn.sendall("File list updated successfully.".encode())
+                log_event(f"Updating file info in database with hash_info: {hash_info}")
+                update_client_info_torrentFile(hash_info, file_name, file_size, piece_size, number_of_pieces)   
+                add_hash_info(peers_id, hash_info)           
+                log_event(f"Database update complete with hash_info: {hash_info}")
+                conn.sendall("File info updated successfully.".encode())
+
+            elif command['action'] == 'upload':
+                log_event(f"Upload piece info in database of peer: {hash_info}")
+                update_client_info_peerStorage(peers_id, piece_hash, hash_info, file_name, num_order_in_file)
+                log_event(f"Database update complete with hash_info: {hash_info}")
+                conn.sendall("Piece info updated successfully.".encode())
 
             elif command['action'] == 'fetch':
                 try:
+                    log_event(f"Day la hash info {hash_info}")
                     # Truy vấn tìm tất cả các peer có hash_info trong bảng DHT
                     cur.execute("""
                         SELECT peer_id, peers_ip, peers_port, peers_hostname 
-                        FROM DHT
-                        WHERE hash_info = %s
+                        FROM DHT_peers
+                        WHERE JSON_CONTAINS(hash_info, JSON_QUOTE(%s))
                     """, (hash_info,))
                     results = cur.fetchall()
 
@@ -142,12 +223,7 @@ def client_handler(conn, addr):
                             key=lambda peer: xor_distance(peers_id, peer['peers_id'])
                         )
 
-                        # Lọc ra những peer đang kết nối (giả sử active_connections chứa các peer đang hoạt động)
-                        active_sorted_peers_info = [
-                            peer for peer in sorted_peers_info if peer['peers_hostname'] in active_connections
-                        ]
-
-                        selected_peer_ids = [peer['peers_id'] for peer in active_sorted_peers_info]
+                        selected_peer_ids = [peer['peers_id'] for peer in sorted_peers_info]
 
                         try:
                             # Kiểm tra nếu số lượng peer lớn hơn 1
@@ -155,34 +231,32 @@ def client_handler(conn, addr):
                                 # Tạo danh sách các placeholder cho từng `peer_id`
                                 placeholders = ", ".join(["%s"] * len(selected_peer_ids))
                                 query = f"""
-                                    SELECT file_name, file_size, piece_hash, piece_size, num_order_in_file, peers_id
-                                    FROM torrent_file
-                                    WHERE peers_id IN ({placeholders}) AND file_name = %s
+                                    SELECT file_name, piece_hash, num_order_in_file, peer_id
+                                    FROM peer_storage
+                                    WHERE peer_id IN ({placeholders}) AND hash_info = %s
                                 """
-                                cur.execute(query, (*selected_peer_ids, file_name))  # Truyền selected_peer_ids dưới dạng unpacked arguments
+                                cur.execute(query, (*selected_peer_ids, hash_info))  # Truyền selected_peer_ids dưới dạng unpacked arguments
                             else:
                                 # Truy vấn khi chỉ có 1 peer_id
                                 cur.execute("""
-                                    SELECT file_name, file_size, piece_hash, piece_size, num_order_in_file, peers_id
-                                    FROM torrent_file
-                                    WHERE peers_id = %s AND file_name = %s
-                                """, (selected_peer_ids[0], file_name))
+                                    SELECT file_name, piece_hash, num_order_in_file, peer_id
+                                    FROM peer_storage
+                                    WHERE peer_id = %s AND hash_info = %s
+                                """, (selected_peer_ids[0], hash_info))
                             results = cur.fetchall()
 
                             torrent_file_info = [
                                 {
                                     'file_name': row[0],
-                                    'file_size': row[1],
-                                    'piece_hash': row[2],
-                                    'piece_size': row[3],
-                                    'num_order_in_file': row[4],
-                                    'peers_id': row[5]  
+                                    'piece_hash': row[1],
+                                    'num_order_in_file': row[2],
+                                    'peers_id': row[3]  
                                 }
                                 for row in results
                             ]
                             
                             response_data = {
-                                'active_peers': active_sorted_peers_info,
+                                'active_peers': sorted_peers_info,
                                 'torrent_file_info': torrent_file_info
                             }           
                             # Gửi thông tin peer đã sắp xếp cho client
@@ -209,8 +283,7 @@ def client_handler(conn, addr):
     except Exception as e:
         logging.exception(f"An error occurred while handling client {addr}: {e}")
     finally:
-        if client_peers_hostname:
-            del active_connections[client_peers_hostname]  
+        delete_peer_from_DHT_peers(peers_id)
 
 def request_file_list_from_client(peers_hostname):
     if peers_hostname in active_connections:
