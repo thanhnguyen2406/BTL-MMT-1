@@ -9,7 +9,8 @@ from collections import defaultdict
 
 stop_event = threading.Event()
 
-def generate_peer_id(): 
+def generate_peer_id():
+    """Tạo peer_id ngẫu nhiên 160-bit."""
     return hashlib.sha1(str(random.getrandbits(160)).encode()).hexdigest()
 
 peers_id = generate_peer_id()
@@ -78,7 +79,25 @@ def check_local_piece_files(file_name):
     else:
         return False
 
-def handle_upload_piece(sock, peers_port, file_name, file_size, pieces):
+def handle_publish_file(sock, peers_port,file_name,file_size,number_of_pieces):
+    global peers_id
+    peers_hostname = socket.gethostname()
+    command = {
+        "action": "publish",
+        "peers_id": peers_id,
+        "peers_port": peers_port,
+        "peers_hostname":peers_hostname,
+        "file_name":file_name,
+        "file_size":file_size,
+        "number_of_pieces": number_of_pieces,
+    }
+    # shared_piece_files_dir.append(command)
+    sock.sendall(json.dumps(command).encode() + b'\n')
+    response = sock.recv(4096).decode()
+    print(response)
+
+
+def handle_upload_piece(sock, peers_port, pieces, file_name):
     pieces_hash = create_pieces_string(pieces)
     user_input_num_piece = input( f"File {file_name} have {pieces}\n piece: {pieces_hash}. \nPlease select num piece in file to upload:" )
     num_order_in_file = shlex.split(user_input_num_piece) 
@@ -88,9 +107,9 @@ def handle_upload_piece(sock, peers_port, file_name, file_size, pieces):
         index = pieces.index(f"{file_name}_piece{i}")
         piece_hash.append(pieces_hash[index])
         print (f"Number {i} : {pieces_hash[index]}")
-    upload_piece_file(sock,peers_port,file_name, file_size, piece_hash, num_order_in_file)
+    upload_piece_file(sock,peers_port,file_name, piece_hash, num_order_in_file)
 
-def upload_piece_file(sock,peers_port,file_name, file_size, piece_hash, num_order_in_file):
+def upload_piece_file(sock,peers_port,file_name, piece_hash, num_order_in_file):
     global peers_id
     peers_hostname = socket.gethostname()
     command = {
@@ -99,26 +118,10 @@ def upload_piece_file(sock,peers_port,file_name, file_size, piece_hash, num_orde
         "peers_port": peers_port,
         "peers_hostname":peers_hostname,
         "file_name":file_name,
-        "file_size":file_size,
         "piece_hash":piece_hash,
         "num_order_in_file":num_order_in_file,
-        "number_of_pieces":len(num_order_in_file),
     }
     # shared_piece_files_dir.append(command)
-    sock.sendall(json.dumps(command).encode() + b'\n')
-    response = sock.recv(4096).decode()
-    print(response)
-
-def handler_update_peer_seeder(sock,peers_port,file_name):
-    global peers_id
-    peers_hostname = socket.gethostname()
-    command = {
-        "action": "update",
-        "peers_id": peers_id,
-        "peers_port": peers_port,
-        "peers_hostname":peers_hostname,
-        "file_name":file_name,
-    }
     sock.sendall(json.dumps(command).encode() + b'\n')
     response = sock.recv(4096).decode()
     print(response)
@@ -215,7 +218,6 @@ def fetch_file(sock,peers_port,file_name, piece_hash, num_order_in_file):
                     if len(pieces) == total_pieces_needed:  # Nếu đủ số lượng piece cần thiết
                         merge_pieces_into_file(pieces, file_name)
                         print(f"Đã tải đủ các piece và hoàn thành file: {file_name}")
-                        handler_update_peer_seeder(sock,peers_port,file_name)
                         return  # Thoát khỏi hàm khi hoàn thành file
 
         # Nếu không đủ piece
@@ -264,60 +266,6 @@ def start_host_service(port, shared_files_dir):
 
     server_sock.close()
 
-def authenticate_user(sock):
-    global peers_id
-    peers_hostname = socket.gethostname()
-    while True:
-        # Hiển thị tùy chọn cho người dùng
-        action = input("Bạn có tài khoản chưa? (login/register/exit): ").strip().lower()
-        
-        if action == 'login':
-            username = input("Tên đăng nhập: ").strip()
-            password = input("Mật khẩu: ").strip()
-            password_hash = hashlib.sha256(password.encode()).hexdigest()
-
-            # Gửi yêu cầu đăng nhập tới server
-            command = {
-                "action": "login",
-                "peers_id" : peers_id,
-                "peers_hostname":peers_hostname,
-                "username":username,
-                "password_hash":password_hash
-            }
-            sock.sendall(json.dumps(command).encode() + b'\n')
-            response = json.loads(sock.recv(4096).decode())
-            
-            if response.get("status") == "success":
-                print("Đăng nhập thành công!")
-                return True
-            else:
-                print("Đăng nhập thất bại. Vui lòng thử lại.")
-        
-        elif action == 'register':
-            username = input("Tên đăng nhập: ").strip()
-            password = input("Mật khẩu: ").strip()
-            password_hash = hashlib.sha256(password.encode()).hexdigest()
-
-            # Gửi yêu cầu tạo tài khoản tới server
-            command = {
-                "action": "register",
-                "peers_id" : peers_id,
-                "peers_hostname":peers_hostname,
-                "username":username,
-                "password_hash":password_hash
-            }
-            sock.sendall(json.dumps(command).encode() + b'\n')
-            response = json.loads(sock.recv(4096).decode())
-            
-            if response.get("status") == "success":
-                print("Tạo tài khoản thành công! Bạn có thể đăng nhập.")
-            else:
-                print("Tạo tài khoản thất bại. Tên đăng nhập đã tồn tại hoặc có lỗi khác.")
-        elif action == 'exit':
-            return False
-        else:
-            print("Invalid command.")
-
 def connect_to_server(server_host, server_port, peers_port):
     global peers_id
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -329,43 +277,39 @@ def connect_to_server(server_host, server_port, peers_port):
 def main(server_host, server_port, peers_port):
     host_service_thread = threading.Thread(target=start_host_service, args=(peers_port, './'))
     host_service_thread.start()
-    # Connect to the server
-    sock = connect_to_server(server_host, server_port, peers_port)
 
-    
-    if not authenticate_user(sock):
-        print("Không thể xác thực người dùng.")
-        sock.close()
-        host_service_thread.join()
-        return
+    # Connect to the server
+    sock = connect_to_server(server_host, server_port,peers_port)
 
     try:
         while True:
-            user_input = input("Enter command (upload file_name/ fetch file_name/ exit): ")#addr[0],peers_port, peers_hostname,file_name, piece_hash,num_order_in_file
+            user_input = input("Enter command (publish file_name/ fetch file_name/ exit): ")#addr[0],peers_port, peers_hostname,file_name, piece_hash,num_order_in_file
             command_parts = shlex.split(user_input)
-            if len(command_parts) == 2 and command_parts[0].lower() == 'upload':
+            if len(command_parts) == 2 and command_parts[0].lower() == 'publish':
                 _,file_name = command_parts
                 if check_local_files(file_name):
                     piece_size = 524288  # 524288 byte = 512KB
                     file_size = os.path.getsize(file_name)
                     pieces = split_file_into_pieces(file_name,piece_size)
-                    handle_upload_piece(sock, peers_port, file_name, file_size, pieces)
+                    handle_publish_file(sock, peers_port,file_name,file_size,len(pieces))
+                else:
+                    print(f"Local file {file_name}/piece does not exist.")
+            elif len(command_parts) == 2 and command_parts[0].lower() == 'upload':
+                _,file_name = command_parts
+                if check_local_files(file_name):
+                    piece_size = 524288  # 524288 byte = 512KB
+                    pieces = split_file_into_pieces(file_name,piece_size)
+                    handle_upload_piece(sock, peers_port, pieces, file_name)
                 elif (pieces := check_local_piece_files(file_name)):
                     handle_upload_piece(sock, peers_port, pieces, file_name)
                 else:
                     print(f"Local file {file_name}/piece does not exist.")
-
             elif len(command_parts) == 2 and command_parts[0].lower() == 'fetch':
-                try:
-                    _, file_name = command_parts
-                    pieces = check_local_piece_files(file_name)
-                    pieces_hash = [] if not pieces else create_pieces_string(pieces)
-                    num_order_in_file= [] if not pieces else [item.split("_")[-1][5:] for item in pieces]
-                    fetch_file(sock,peers_port,file_name, pieces_hash,num_order_in_file)
-                except Exception as e:
-                    print("Invalid fetch command.")
-                    # continue
-
+                _, file_name = command_parts
+                pieces = check_local_piece_files(file_name)
+                pieces_hash = [] if not pieces else create_pieces_string(pieces)
+                num_order_in_file= [] if not pieces else [item.split("_")[-1][5:] for item in pieces]
+                fetch_file(sock,peers_port,file_name, pieces_hash,num_order_in_file)
             elif user_input.lower() == 'exit':
                 stop_event.set()  # Stop the host service thread
                 sock.close()
@@ -374,13 +318,13 @@ def main(server_host, server_port, peers_port):
                 print("Invalid command.")
 
     finally:
-        sock.close()
-        host_service_thread.join()
+            sock.close()
+            host_service_thread.join()
 
 
 if __name__ == "__main__":
     # Replace with your server's IP address and port number
-    SERVER_HOST = '127.0.0.1'
+    SERVER_HOST = '192.168.8.114'
     SERVER_PORT = 65432
-    CLIENT_PORT = 65434
+    CLIENT_PORT = 65435
     main(SERVER_HOST, SERVER_PORT,CLIENT_PORT)
