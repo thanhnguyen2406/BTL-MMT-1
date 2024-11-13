@@ -7,7 +7,6 @@ import mysql.connector
 from mysql.connector import Error
 import sys
 import json
-import shlex
 
 conn = None
 cur = None
@@ -157,6 +156,23 @@ def update_hash_info(peers_id, new_hash_info, role):
         print(f"Error in update_hash_info: {e}")
         conn.rollback()
 
+def update_download_count(hash_info):
+    try:
+        # Cập nhật download_count cho bản ghi có hash_info tương ứng
+        cur.execute("""
+            UPDATE torrent_file
+            SET download_count = download_count + 1
+            WHERE hash_info = %s
+        """, (hash_info,))
+        
+        # Xác nhận thay đổi vào cơ sở dữ liệu
+        conn.commit()
+        print(f"Lượt tải đã được cập nhật cho hash_info: {hash_info}")
+
+    except mysql.connector.Error as e:
+        print(f"Error in update_download_count: {e}")
+        conn.rollback()
+
 def delete_peer_from_DHT_peers(peer_id):
     try:
         # Xóa các bản ghi liên quan đến peer_id trong bảng peer_storage
@@ -178,6 +194,44 @@ def delete_peer_from_DHT_peers(peer_id):
     except mysql.connector.Error as e:
         print(f"Error in deleting peer data: {e}")
         conn.rollback()
+
+def tracker_torrent_file(conn, hash_info):
+    try:
+        # Đếm số lượng seeder cho hash_info cụ thể
+        cur.execute("""
+            SELECT COUNT(*) FROM DHT_peers
+            WHERE JSON_CONTAINS(hash_info, JSON_OBJECT('hash_info', %s, 'role', 'seeder'))
+        """, (hash_info,))
+        seeder_count = cur.fetchone()[0]
+
+        # Đếm số lượng leecher cho hash_info cụ thể
+        cur.execute("""
+            SELECT COUNT(*) FROM DHT_peers
+            WHERE JSON_CONTAINS(hash_info, JSON_OBJECT('hash_info', %s, 'role', 'leecher'))
+        """, (hash_info,))
+        leecher_count = cur.fetchone()[0]
+
+        # Lấy download count từ bảng torrent_file
+        cur.execute("""
+            SELECT download_count FROM torrent_file
+            WHERE hash_info = %s
+        """, (hash_info,))
+        result = cur.fetchone()
+        download_count = result[0] if result else 0  # Nếu không tìm thấy, download_count mặc định là 0
+
+        # Kết quả cuối cùng
+        tracker_info = {
+            "seeder_count": seeder_count,
+            "leecher_count": leecher_count,
+            "download_count": download_count
+        }
+        conn.sendall(json.dumps(tracker_info).encode())
+        print("Tracker info sent to client successfully")
+
+    except mysql.connector.Error as e:
+        error_msg = f"Error in tracker_torrent_file: {e}"
+        print(error_msg)
+        conn.sendall(json.dumps({"error": error_msg}).encode())
 
 active_connections = {}  
 host_files = {}
@@ -238,10 +292,13 @@ def client_handler(conn, addr):
 
             elif command['action'] == 'update':
                 update_hash_info(peers_id, hash_info, "seeder")
+                update_download_count(hash_info)
                 conn.sendall("Peer info updated successfully.".encode())
 
+            elif command['action'] == 'tracker':
+                tracker_torrent_file(conn, hash_info)
 
-            elif command['action'] == 'fetch':
+            elif command['action'] == 'download':
                 try:
                     # Truy vấn tìm tất cả các peer có hash_info trong bảng DHT
                     cur.execute("""

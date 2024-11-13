@@ -5,6 +5,9 @@ import threading
 import shlex
 import hashlib
 import random
+import sys
+import termios
+import tty
 from collections import defaultdict
 
 stop_event = threading.Event()
@@ -78,14 +81,44 @@ def check_local_piece_files(file_name):
     else:
         return False
 
+def get_password(prompt="Password: "):
+    print(prompt, end="", flush=True)
+    password = ""
+    
+    # Lưu cài đặt terminal hiện tại
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+
+    try:
+        tty.setraw(fd)  # Chuyển terminal sang chế độ raw
+        
+        while True:
+            ch = sys.stdin.read(1)  # Đọc từng ký tự
+            if ch == "\n" or ch == "\r":  # Kết thúc khi nhấn Enter
+                print("")
+                break
+            elif ch == "\x7f":  # Xóa ký tự khi nhấn Backspace
+                if len(password) > 0:
+                    password = password[:-1]
+                    print("\b \b", end="", flush=True)
+            else:
+                password += ch
+                print("*", end="", flush=True)  # Hiển thị `*`
+
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)  # Phục hồi cài đặt ban đầu
+
+    return password
+
 def handle_upload_piece(sock, peers_port, file_name, file_size, pieces):
     pieces_hash = create_pieces_string(pieces)
     num_order_in_file = [str(i) for i in range(1, len(pieces) + 1)]
     piece_hash=[]
+    print("You have uploaded:")
     for i in num_order_in_file:
         index = pieces.index(f"{file_name}_piece{i}")
         piece_hash.append(pieces_hash[index])
-        print (f"Number {i} : {pieces_hash[index]}")
+        print (f"Piece number {i} : {pieces_hash[index]}")
     upload_piece_file(sock,peers_port,file_name, file_size, piece_hash, num_order_in_file)
 
 def upload_piece_file(sock,peers_port,file_name, file_size, piece_hash, num_order_in_file):
@@ -158,10 +191,10 @@ def request_file_from_peer(peers_ip, peer_port, file_name, piece_hash, num_order
     finally:
         peer_sock.close()
 
-def fetch_file(sock,peers_port,file_name, piece_hash, num_order_in_file):
+def handle_download_file(sock,peers_port,file_name, piece_hash, num_order_in_file):
     peers_hostname = socket.gethostname()
     command = {
-        "action": "fetch",
+        "action": "download",
         "peers_id" : peers_id,
         "peers_port": peers_port,
         "peers_hostname":peers_hostname,
@@ -243,6 +276,17 @@ def handle_file_request(conn, shared_files_dir):
     finally:
         conn.close()
 
+def handle_tracker_file(sock, file_name):
+    command = {
+        "action": "tracker",
+        "file_name":file_name,
+    } 
+
+    # command = {"action": "fetch", "fname": fname}
+    sock.sendall(json.dumps(command).encode() + b'\n')
+    response = json.loads(sock.recv(4096).decode())
+    print(response)
+
 def start_host_service(port, shared_files_dir):
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_sock.bind(('0.0.0.0', port))
@@ -271,7 +315,7 @@ def authenticate_user(sock):
         
         if action == 'login':
             username = input("Tên đăng nhập: ").strip()
-            password = input("Mật khẩu: ").strip()
+            password = get_password()
             password_hash = hashlib.sha256(password.encode()).hexdigest()
 
             # Gửi yêu cầu đăng nhập tới server
@@ -286,7 +330,7 @@ def authenticate_user(sock):
             response = json.loads(sock.recv(4096).decode())
             
             if response.get("status") == "success":
-                print("Đăng nhập thành công!")
+                print("==== Đăng nhập thành công ====")
                 return True
             else:
                 print("Đăng nhập thất bại. Vui lòng thử lại.")
@@ -339,7 +383,7 @@ def main(server_host, server_port, peers_port):
 
     try:
         while True:
-            user_input = input("Enter command (upload file_name/ fetch file_name/ exit): ")#addr[0],peers_port, peers_hostname,file_name, piece_hash,num_order_in_file
+            user_input = input("Enter command (upload file_name/ download file_name/ tracker file_name/ exit): ")#addr[0],peers_port, peers_hostname,file_name, piece_hash,num_order_in_file
             command_parts = shlex.split(user_input)
             if len(command_parts) == 2 and command_parts[0].lower() == 'upload':
                 _,file_name = command_parts
@@ -353,13 +397,21 @@ def main(server_host, server_port, peers_port):
                 else:
                     print(f"Local file {file_name}/piece does not exist.")
 
-            elif len(command_parts) == 2 and command_parts[0].lower() == 'fetch':
+            elif len(command_parts) == 2 and command_parts[0].lower() == 'download':
                 try:
                     _, file_name = command_parts
                     pieces = check_local_piece_files(file_name)
                     pieces_hash = [] if not pieces else create_pieces_string(pieces)
                     num_order_in_file= [] if not pieces else [item.split("_")[-1][5:] for item in pieces]
-                    fetch_file(sock,peers_port,file_name, pieces_hash,num_order_in_file)
+                    handle_download_file(sock,peers_port,file_name, pieces_hash,num_order_in_file)
+                except Exception as e:
+                    print("Invalid fetch command.")
+                    # continue
+            
+            elif len(command_parts) == 2 and command_parts[0].lower() == 'tracker':
+                try:
+                    _, file_name = command_parts
+                    handle_tracker_file(sock, file_name)
                 except Exception as e:
                     print("Invalid fetch command.")
                     # continue
@@ -378,7 +430,7 @@ def main(server_host, server_port, peers_port):
 
 if __name__ == "__main__":
     # Replace with your server's IP address and port number
-    SERVER_HOST = '127.0.0.1'
+    SERVER_HOST = '192.168.1.104'
     SERVER_PORT = 65432
     CLIENT_PORT = 65433
     main(SERVER_HOST, SERVER_PORT,CLIENT_PORT)
