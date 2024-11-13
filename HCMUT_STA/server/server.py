@@ -118,7 +118,7 @@ def update_client_info_peerStorage(peer_id, piece_hash, hash_info, file_name, nu
         print(f"Error in update_client_info_peerStorage: {e}")
         conn.rollback()
 
-def add_hash_info(peers_id, new_hash_info, role):
+def update_hash_info(peers_id, new_hash_info, role):
     try:
         # Lấy dữ liệu hash_info hiện tại từ bảng
         cur.execute("""
@@ -128,45 +128,33 @@ def add_hash_info(peers_id, new_hash_info, role):
 
         # Kiểm tra nếu peer đã có hash_info
         if result and result[0]:
-            # Chuyển đổi hash_info hiện tại thành list
             existing_hash_info = json.loads(result[0])
+            for entry in existing_hash_info:
+                if entry['hash_info'] == new_hash_info:
+                    # Nếu hash_info đã tồn tại nhưng role khác, cập nhật role
+                    if entry['role'] != role:
+                        entry['role'] = role
+                        updated = True
+                    break
         else:
-            # Nếu không có dữ liệu hash_info, khởi tạo list rỗng
             existing_hash_info = []
 
-        # Tìm kiếm `new_hash_info` trong danh sách hiện tại
-        updated = False
-        for entry in existing_hash_info:
-            if entry['hash_info'] == new_hash_info:
-                # Nếu hash_info đã tồn tại nhưng role khác, cập nhật role
-                if entry['role'] != role:
-                    entry['role'] = role
-                    updated = True
-                break
-            else:
-                # Nếu hash_info chưa tồn tại, thêm mới vào danh sách
-                existing_hash_info.append({"hash_info": new_hash_info, "role": role})
-                updated = True
+        existing_hash_info.append({"hash_info": new_hash_info, "role": role})
+        updated_hash_info = json.dumps(existing_hash_info)
 
-        # Chỉ cập nhật cơ sở dữ liệu nếu có thay đổi
-        if updated:
-            updated_hash_info = json.dumps(existing_hash_info)
-
-            # Cập nhật vào cơ sở dữ liệu
-            cur.execute("""
-                UPDATE DHT_peers
-                SET hash_info = %s
-                WHERE peer_id = %s
-            """, (updated_hash_info, peers_id))
-
-            # Commit các thay đổi
-            conn.commit()
-            print(f"Hash info đã được cập nhật cho peer_id: {peers_id}")
-        else:
-            print(f"No update needed for peer_id: {peers_id}")
+        # Cập nhật vào cơ sở dữ liệu
+        cur.execute("""
+            UPDATE DHT_peers
+            SET hash_info = %s
+            WHERE peer_id = %s
+        """, (updated_hash_info, peers_id))
+        
+        # Commit các thay đổi
+        conn.commit()
+        print(f"Hash info đã được cập nhật cho peer_id: {peers_id}")
 
     except mysql.connector.Error as e:
-        print(f"Error in add_hash_info: {e}")
+        print(f"Error in update_hash_info: {e}")
         conn.rollback()
 
 def delete_peer_from_DHT_peers(peer_id):
@@ -243,13 +231,13 @@ def client_handler(conn, addr):
             elif command['action'] == 'upload':
                 log_event(f"Upload file info and its piece hash into database with hash_info: {hash_info}")
                 update_client_info_torrentFile(hash_info, file_name, file_size, piece_size, number_of_pieces)   
-                add_hash_info(peers_id, hash_info, "seeder")
+                update_hash_info(peers_id, hash_info, "seeder")
                 update_client_info_peerStorage(peers_id, piece_hash, hash_info, file_name, num_order_in_file)
                 log_event(f"Database update complete with hash_info: {hash_info}")
                 conn.sendall("Piece info updated successfully.".encode())
 
             elif command['action'] == 'update':
-                add_hash_info(peers_id, hash_info, "seeder")
+                update_hash_info(peers_id, hash_info, "seeder")
                 conn.sendall("Peer info updated successfully.".encode())
 
 
@@ -264,7 +252,7 @@ def client_handler(conn, addr):
                     results = cur.fetchall()
 
                     if results:
-                        add_hash_info(peers_id, hash_info, "leecher")
+                        update_hash_info(peers_id, hash_info, "leecher")
                         # Tạo danh sách thông tin các peer
                         peers_info = [
                             {

@@ -80,10 +80,8 @@ def check_local_piece_files(file_name):
 
 def handle_upload_piece(sock, peers_port, file_name, file_size, pieces):
     pieces_hash = create_pieces_string(pieces)
-    user_input_num_piece = input( f"File {file_name} have {pieces}\n piece: {pieces_hash}. \nPlease select num piece in file to upload:" )
-    num_order_in_file = shlex.split(user_input_num_piece) 
+    num_order_in_file = [str(i) for i in range(1, len(pieces) + 1)]
     piece_hash=[]
-    print("You was selected: " )
     for i in num_order_in_file:
         index = pieces.index(f"{file_name}_piece{i}")
         piece_hash.append(pieces_hash[index])
