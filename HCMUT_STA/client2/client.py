@@ -5,6 +5,9 @@ import threading
 import shlex
 import hashlib
 import random
+import sys
+import termios
+import tty
 from collections import defaultdict
 
 stop_event = threading.Event()
@@ -37,8 +40,8 @@ def split_file_into_pieces(file_path, piece_length):
             piece_data = file.read(piece_length)
             if not piece_data:
                 break
+            #Piece_file name
             piece_file_path = f"{file_path}_piece{counter}"
-            # piece_file_path = os.path.join("", f"{file_path}_piece{counter}")
             with open(piece_file_path, "wb") as piece_file:
                 piece_file.write(piece_data)
             pieces.append(piece_file_path)
@@ -78,6 +81,35 @@ def check_local_piece_files(file_name):
     else:
         return False
 
+def get_password(prompt="Password: "):
+    print(prompt, end="", flush=True)
+    password = ""
+    
+    # Lưu cài đặt terminal hiện tại
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+
+    try:
+        tty.setraw(fd)  # Chuyển terminal sang chế độ raw
+        
+        while True:
+            ch = sys.stdin.read(1)  # Đọc từng ký tự
+            if ch == "\n" or ch == "\r":  # Kết thúc khi nhấn Enter
+                print("")
+                break
+            elif ch == "\x7f":  # Xóa ký tự khi nhấn Backspace
+                if len(password) > 0:
+                    password = password[:-1]
+                    print("\b \b", end="", flush=True)
+            else:
+                password += ch
+                print("*", end="", flush=True)  # Hiển thị `*`
+
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)  # Phục hồi cài đặt ban đầu
+
+    return password
+
 def handle_upload_piece(sock, peers_port, file_name, file_size, pieces):
     pieces_hash = create_pieces_string(pieces)
     num_order_in_file = [str(i) for i in range(1, len(pieces) + 1)]
@@ -88,6 +120,40 @@ def handle_upload_piece(sock, peers_port, file_name, file_size, pieces):
         piece_hash.append(pieces_hash[index])
         print (f"Piece number {i} : {pieces_hash[index]}")
     upload_piece_file(sock,peers_port,file_name, file_size, piece_hash, num_order_in_file)
+
+
+def handle_list_peers(sock):
+    global peers_id
+
+    # Xây dựng lệnh để gửi
+    command = {
+        "action": "list",
+        "peers_id": peers_id,
+    }
+
+    try:
+        sock.sendall(json.dumps(command).encode())  # Gửi command đi
+        response = sock.recv(4096).decode()  # Nhận phản hồi từ server
+        peers_list = json.loads(response)  # Chuyển đổi dữ liệu JSON thành list
+
+        # Duyệt qua các peer trong peers_list và in thông tin
+        for peer in peers_list:
+            peer_id = peer["peer_id"]
+            peers_ip = peer["peers_ip"]
+            peers_port = peer["peers_port"]
+            peers_hostname = peer["peers_hostname"]
+            file_name = peer["file_name"]
+
+            print(f"Peer with ID \"{peer_id}\":")
+            print(f" . Peer IP: {peers_ip}")
+            print(f" . Peer port: {peers_port}")
+            print(f" . Peer hostname: {peers_hostname}")
+            print(f" . File name: {file_name if file_name else 'None'}\n")
+
+    except Exception as e:
+        print(f"Error in handle_list_peers: {e}")
+
+
 
 def upload_piece_file(sock,peers_port,file_name, file_size, piece_hash, num_order_in_file):
     global peers_id
@@ -283,7 +349,7 @@ def authenticate_user(sock):
         
         if action == 'login':
             username = input("Tên đăng nhập: ").strip()
-            password = input("Mật khẩu: ").strip()
+            password = get_password()
             password_hash = hashlib.sha256(password.encode()).hexdigest()
 
             # Gửi yêu cầu đăng nhập tới server
@@ -298,7 +364,7 @@ def authenticate_user(sock):
             response = json.loads(sock.recv(4096).decode())
             
             if response.get("status") == "success":
-                print("Đăng nhập thành công!")
+                print("==== Đăng nhập thành công ====")
                 return True
             else:
                 print("Đăng nhập thất bại. Vui lòng thử lại.")
@@ -351,9 +417,12 @@ def main(server_host, server_port, peers_port):
 
     try:
         while True:
-            user_input = input("Enter command (upload file_name/ download file_name/ tracker file_name/ exit): ")#addr[0],peers_port, peers_hostname,file_name, piece_hash,num_order_in_file
+            user_input = input("Enter command (upload file_name/ download file_name/ tracker file_name/ list/ exit): ")#addr[0],peers_port, peers_hostname,file_name, piece_hash,num_order_in_file
             command_parts = shlex.split(user_input)
-            if len(command_parts) == 2 and command_parts[0].lower() == 'upload':
+            if len(command_parts) == 1 and command_parts[0].lower() == 'list':
+                handle_list_peers(sock)
+
+            elif len(command_parts) == 2 and command_parts[0].lower() == 'upload':
                 _,file_name = command_parts
                 if check_local_files(file_name):
                     piece_size = 524288  # 524288 byte = 512KB
@@ -398,7 +467,7 @@ def main(server_host, server_port, peers_port):
 
 if __name__ == "__main__":
     # Replace with your server's IP address and port number
-    SERVER_HOST = '192.168.1.104'
+    SERVER_HOST = '192.168.1.10'
     SERVER_PORT = 65432
     CLIENT_PORT = 65434
     main(SERVER_HOST, SERVER_PORT,CLIENT_PORT)

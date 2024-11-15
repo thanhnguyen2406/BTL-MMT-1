@@ -66,6 +66,50 @@ def verify_user(username, password):
     else:
         return False
 
+def get_peers_list(conn):
+    try:
+        # Lấy toàn bộ danh sách peer
+        cur.execute("SELECT * FROM DHT_peers")
+        peers_list = cur.fetchall()
+
+        # Danh sách để lưu kết quả cuối cùng
+        result_list = []
+
+        for peer_id, peers_ip, peers_port, peers_hostname, hash_info in peers_list:
+            file_names = []
+
+            if hash_info:
+                try:
+                    hash_info_entries = json.loads(hash_info)  # Giải nén JSON
+                    for entry in hash_info_entries:
+                        hash_val = entry.get('hash_info')
+                        if hash_val:
+                            cur.execute("""
+                                SELECT file_name
+                                FROM torrent_file
+                                WHERE hash_info = %s
+                            """, (hash_val,))
+                            file_name = cur.fetchone()
+                            file_names.append(file_name[0] if file_name else None)
+                except json.JSONDecodeError:
+                    pass  # Nếu JSON không hợp lệ, bỏ qua
+
+            # Nếu không có file_name hoặc hash_info, gán [None]
+            result_list.append({
+                'peer_id': peer_id,
+                'peers_ip': peers_ip,
+                'peers_port': peers_port,
+                'peers_hostname': peers_hostname,
+                'file_name': file_names or [None]
+            })
+
+        # Gửi danh sách kết quả tới client
+        conn.sendall(json.dumps(result_list).encode())
+        print("Peers list sent to client successfully")
+
+    except Exception as e:
+        print(f"Error in get_peers_list: {e}")
+
 def update_client_info_DHT(peers_id, peers_ip, peers_port, peers_hostname):
 
     try:
@@ -128,17 +172,20 @@ def update_hash_info(peers_id, new_hash_info, role):
         # Kiểm tra nếu peer đã có hash_info
         if result and result[0]:
             existing_hash_info = json.loads(result[0])
+            found = False
             for entry in existing_hash_info:
                 if entry['hash_info'] == new_hash_info:
                     # Nếu hash_info đã tồn tại nhưng role khác, cập nhật role
                     if entry['role'] != role:
                         entry['role'] = role
-                        updated = True
+                        found = True
                     break
+            if not found:
+                existing_hash_info.append({"hash_info": new_hash_info, "role": role})
         else:
             existing_hash_info = []
+            existing_hash_info.append({"hash_info": new_hash_info, "role": role})
 
-        existing_hash_info.append({"hash_info": new_hash_info, "role": role})
         updated_hash_info = json.dumps(existing_hash_info)
 
         # Cập nhật vào cơ sở dữ liệu
@@ -282,6 +329,9 @@ def client_handler(conn, addr):
                     response = {"status": "fail", "message": "Tên đăng nhập đã tồn tại"}
                 conn.sendall(json.dumps(response).encode())
 
+            elif command['action'] == 'list':
+                get_peers_list(conn)
+
             elif command['action'] == 'upload':
                 log_event(f"Upload file info and its piece hash into database with hash_info: {hash_info}")
                 update_client_info_torrentFile(hash_info, file_name, file_size, piece_size, number_of_pieces)   
@@ -390,11 +440,6 @@ def client_handler(conn, addr):
                 except mysql.connector.Error as e:
                     print(f"Error in fetch: {e}")
                     conn.sendall(json.dumps({'error': str(e)}).encode())
-
-
-            elif command['action'] == 'file_list':
-                files = command['files']
-                print(f"List of files : {files}")
 
     except Exception as e:
         logging.exception(f"An error occurred while handling client {addr}: {e}")

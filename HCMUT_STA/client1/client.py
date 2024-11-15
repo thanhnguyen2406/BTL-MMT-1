@@ -40,8 +40,8 @@ def split_file_into_pieces(file_path, piece_length):
             piece_data = file.read(piece_length)
             if not piece_data:
                 break
+            #Piece_file name
             piece_file_path = f"{file_path}_piece{counter}"
-            # piece_file_path = os.path.join("", f"{file_path}_piece{counter}")
             with open(piece_file_path, "wb") as piece_file:
                 piece_file.write(piece_data)
             pieces.append(piece_file_path)
@@ -120,6 +120,40 @@ def handle_upload_piece(sock, peers_port, file_name, file_size, pieces):
         piece_hash.append(pieces_hash[index])
         print (f"Piece number {i} : {pieces_hash[index]}")
     upload_piece_file(sock,peers_port,file_name, file_size, piece_hash, num_order_in_file)
+
+
+def handle_list_peers(sock):
+    global peers_id
+
+    # Xây dựng lệnh để gửi
+    command = {
+        "action": "list",
+        "peers_id": peers_id,
+    }
+
+    try:
+        sock.sendall(json.dumps(command).encode())  # Gửi command đi
+        response = sock.recv(4096).decode()  # Nhận phản hồi từ server
+        peers_list = json.loads(response)  # Chuyển đổi dữ liệu JSON thành list
+
+        # Duyệt qua các peer trong peers_list và in thông tin
+        for peer in peers_list:
+            peer_id = peer["peer_id"]
+            peers_ip = peer["peers_ip"]
+            peers_port = peer["peers_port"]
+            peers_hostname = peer["peers_hostname"]
+            file_name = peer["file_name"]
+
+            print(f"Peer with ID \"{peer_id}\":")
+            print(f" . Peer IP: {peers_ip}")
+            print(f" . Peer port: {peers_port}")
+            print(f" . Peer hostname: {peers_hostname}")
+            print(f" . File name: {file_name if file_name else 'None'}\n")
+
+    except Exception as e:
+        print(f"Error in handle_list_peers: {e}")
+
+
 
 def upload_piece_file(sock,peers_port,file_name, file_size, piece_hash, num_order_in_file):
     global peers_id
@@ -383,9 +417,12 @@ def main(server_host, server_port, peers_port):
 
     try:
         while True:
-            user_input = input("Enter command (upload file_name/ download file_name/ tracker file_name/ exit): ")#addr[0],peers_port, peers_hostname,file_name, piece_hash,num_order_in_file
+            user_input = input("Enter command (upload file_name/ download file_name/ tracker file_name/ list/ exit): ")#addr[0],peers_port, peers_hostname,file_name, piece_hash,num_order_in_file
             command_parts = shlex.split(user_input)
-            if len(command_parts) == 2 and command_parts[0].lower() == 'upload':
+            if len(command_parts) == 1 and command_parts[0].lower() == 'list':
+                handle_list_peers(sock)
+
+            elif len(command_parts) == 2 and command_parts[0].lower() == 'upload':
                 _,file_name = command_parts
                 if check_local_files(file_name):
                     piece_size = 524288  # 524288 byte = 512KB
@@ -430,7 +467,7 @@ def main(server_host, server_port, peers_port):
 
 if __name__ == "__main__":
     # Replace with your server's IP address and port number
-    SERVER_HOST = '192.168.1.104'
+    SERVER_HOST = '192.168.1.10'
     SERVER_PORT = 65432
     CLIENT_PORT = 65433
     main(SERVER_HOST, SERVER_PORT,CLIENT_PORT)
