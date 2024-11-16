@@ -10,6 +10,7 @@ import json
 
 conn = None
 cur = None
+stop_event = threading.Event()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -144,23 +145,6 @@ def update_client_info_torrentFile(hash_info, file_name, file_size, piece_size, 
         print(f"Error in update_client_info_torrentFile: {e}")
         conn.rollback()
 
-def update_client_info_peerStorage(peer_id, piece_hash, hash_info, file_name, num_order_in_file):
-    try:
-        # Lưu thông tin vào bảng peer_storage
-        for i in range(len(piece_hash)):
-            cur.execute("""
-                INSERT IGNORE INTO peer_storage (peer_id, piece_hash, hash_info, file_name, num_order_in_file)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (peer_id, piece_hash[i], hash_info, file_name, num_order_in_file[i]))
-        
-        # Commit các thay đổi
-        conn.commit()
-        print(f"Thông tin đã được lưu cho peer_id: {peer_id} với hash_info: {hash_info}")
-
-    except mysql.connector.Error as e:
-        print(f"Error in update_client_info_peerStorage: {e}")
-        conn.rollback()
-
 def update_hash_info(peers_id, new_hash_info, role):
     try:
         # Lấy dữ liệu hash_info hiện tại từ bảng
@@ -220,15 +204,8 @@ def update_download_count(hash_info):
         print(f"Error in update_download_count: {e}")
         conn.rollback()
 
-def delete_peer_from_DHT_peers(peer_id):
+def delete_peer_from_DHT_peers(peer_id, peers_ip, peers_port, peers_hostname):
     try:
-        # Xóa các bản ghi liên quan đến peer_id trong bảng peer_storage
-        cur.execute("""
-            DELETE FROM peer_storage
-            WHERE peer_id = %s
-        """, (peer_id,))
-        conn.commit()
-        
         # Xóa thông tin peer khỏi bảng DHT_peers
         cur.execute("""
             DELETE FROM DHT_peers WHERE peer_id = %s
@@ -236,7 +213,7 @@ def delete_peer_from_DHT_peers(peer_id):
         
         # Commit các thay đổi
         conn.commit()
-        print(f"Peer với peer_id: {peer_id} đã được xóa khỏi cả peer_storage và DHT_peers.")
+        print(f"Connection closed with {peers_hostname}/{peers_ip}:{peers_port}")
     
     except mysql.connector.Error as e:
         print(f"Error in deleting peer data: {e}")
@@ -285,6 +262,9 @@ host_files = {}
 
 def client_handler(conn, addr):
     peers_id = None
+    peers_ip= None
+    peers_port = None
+    peers_hostname = None
     try:
         while True:
             data = conn.recv(4096).decode()
@@ -300,9 +280,7 @@ def client_handler(conn, addr):
             peers_hostname = command['peers_hostname'] if 'peers_hostname' in command else ""
             file_name = command['file_name'] if 'file_name' in command else ""
             file_size = command['file_size'] if 'file_size' in command else ""
-            piece_hash = command['piece_hash'] if 'piece_hash' in command else ""
             piece_size = command['piece_size'] if 'piece_size' in command else ""
-            num_order_in_file = command['num_order_in_file'] if 'num_order_in_file' in command else ""
             number_of_pieces = command['number_of_pieces'] if 'number_of_pieces' in command else ""
 
             username = command['username'] if 'username' in command else ""
@@ -336,7 +314,6 @@ def client_handler(conn, addr):
                 log_event(f"Upload file info and its piece hash into database with hash_info: {hash_info}")
                 update_client_info_torrentFile(hash_info, file_name, file_size, piece_size, number_of_pieces)   
                 update_hash_info(peers_id, hash_info, "seeder")
-                update_client_info_peerStorage(peers_id, piece_hash, hash_info, file_name, num_order_in_file)
                 log_event(f"Database update complete with hash_info: {hash_info}")
                 conn.sendall("Piece info updated successfully.".encode())
 
@@ -370,68 +347,20 @@ def client_handler(conn, addr):
                             }
                             for peer_id, peers_ip, peers_port, peers_hostname in results
                         ]
+                        cur.execute("""
+                            SELECT number_of_pieces
+                            FROM torrent_file
+                            WHERE hash_info = %s
+                        """, (hash_info,))
+                        number_of_pieces = cur.fetchall()
 
-                        # Tính khoảng cách XOR giữa client_peer_id và từng peer trong danh sách
-                        sorted_peers_info = sorted(
-                            peers_info,
-                            key=lambda peer: xor_distance(peers_id, peer['peers_id'])
-                        )
-
-                        selected_peer_ids = [peer['peers_id'] for peer in sorted_peers_info]
-                        unique_piece_data = set()
-                        piece_hash_list = []
-                        order_num_list = []
-
-                        try:
-                            # Kiểm tra nếu số lượng peer lớn hơn 1
-                            if len(selected_peer_ids) > 1:
-                                # Tạo danh sách các placeholder cho từng `peer_id`
-                                placeholders = ", ".join(["%s"] * len(selected_peer_ids))
-                                query = f"""
-                                    SELECT file_name, piece_hash, num_order_in_file, peer_id
-                                    FROM peer_storage
-                                    WHERE peer_id IN ({placeholders}) AND hash_info = %s
-                                """
-                                cur.execute(query, (*selected_peer_ids, hash_info))  # Truyền selected_peer_ids dưới dạng unpacked arguments
-                            else:
-                                # Truy vấn khi chỉ có 1 peer_id
-                                cur.execute("""
-                                    SELECT file_name, piece_hash, num_order_in_file, peer_id
-                                    FROM peer_storage
-                                    WHERE peer_id = %s AND hash_info = %s
-                                """, (selected_peer_ids[0], hash_info))
-                            results = cur.fetchall()
-
-                            torrent_file_info = []
-                            for row in results:
-                                # Thêm từng piece_hash vào tập hợp unique_piece_hashes để tránh trùng lặp
-                                unique_piece_data.add((row[1], row[2]))
-                                torrent_file_info.append({
-                                    'file_name': row[0],
-                                    'piece_hash': row[1],
-                                    'num_order_in_file': row[2],
-                                    'peers_id': row[3]
-                                })
-
-                            # Chuyển tập hợp thành danh sách
-                            piece_hash_list = [piece[0] for piece in unique_piece_data]
-                            order_num_list = [piece[1] for piece in unique_piece_data]
-                            
-                            response_data = {
-                                'active_peers': sorted_peers_info,
-                                'torrent_file_info': torrent_file_info
-                            }           
-                            # Gửi thông tin peer đã sắp xếp cho client
-                            conn.sendall(json.dumps(response_data).encode())
-                            print(f"Đã gửi danh sách peer cho client với hash_info: {hash_info}")
-
-                        except mysql.connector.Error as e:
-                            print(f"Error in fetch: {e}")
-                            conn.sendall(json.dumps({'error': str(e)}).encode())
-
-                        # Publish and Upload new file for peers
-                        update_client_info_peerStorage(peers_id, piece_hash_list, hash_info, file_name, order_num_list)
-
+                        response_data = {
+                            'active_peers': peers_info,
+                            'number_of_pieces': number_of_pieces
+                        }           
+                        # Gửi thông tin peer đã sắp xếp cho client
+                        conn.sendall(json.dumps(response_data).encode())
+                        print(f"Đã gửi danh sách peer cho client với hash_info: {hash_info}")
                     else:
                         # Không tìm thấy peer nào với hash_info yêu cầu
                         conn.sendall(json.dumps({'error': 'No peers found for the specified hash_info'}).encode())
@@ -444,7 +373,7 @@ def client_handler(conn, addr):
     except Exception as e:
         logging.exception(f"An error occurred while handling client {addr}: {e}")
     finally:
-        delete_peer_from_DHT_peers(peers_id)
+        delete_peer_from_DHT_peers(peers_id, peers_ip, peers_port, peers_hostname)
 
 def request_file_list_from_client(peers_hostname):
     if peers_hostname in active_connections:
@@ -466,32 +395,41 @@ def request_file_list_from_client(peers_hostname):
     else:
         return "Error: Client not connected"
 
-def discover_files(peers_hostname):
-    # Connect to the client and request the file list
-    files = request_file_list_from_client(peers_hostname)
-    print(f"Files on {peers_hostname}: {files}")
-
 def ping_host(peers_hostname):
-    cur.execute("SELECT address FROM client_files WHERE hostname = %s", (peers_hostname,))
-    results = cur.fetchone()  
-    ip_address = results[0]
-    print(ip_address)
-    if ip_address:
-        peer_port = 65433
-        peer_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        peer_sock.connect((ip_address, peer_port))
-        request = {'action': 'ping'}
-        peer_sock.sendall(json.dumps(request).encode() + b'\n')
-        response = peer_sock.recv(4096).decode()
-        peer_sock.close()
-        if response:
-            print(f"{peers_hostname} is online!")
-        else:
-            print(f"{peers_hostname} is offline!")
+    # Lấy địa chỉ IP và port từ bảng DHT_peers dựa trên hostname
+    cur.execute("SELECT peers_ip, peers_port FROM DHT_peers WHERE peers_hostname = %s", (peers_hostname,))
+    results = cur.fetchall()  # Lấy tất cả các kết quả thay vì chỉ 1 kết quả
+
+    if results:
+        # Duyệt qua từng dòng kết quả nếu có nhiều hơn 1 kết quả
+        for result in results:
+            peers_ip, peers_port = result  # Gán giá trị cho peers_ip và peers_port từ kết quả truy vấn
+            print(f"Ping to {peers_hostname} at IP: {peers_ip}, Port: {peers_port}")
+
+            try:
+                # Tạo socket và kết nối đến peer
+                peer_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                peer_sock.settimeout(5)  # Đặt timeout cho kết nối
+                
+                peer_sock.connect((peers_ip, peers_port))  # Kết nối tới peer
+                request = {'action': 'ping'}  # Tạo yêu cầu ping
+                peer_sock.sendall(json.dumps(request).encode() + b'\n')  # Gửi yêu cầu ping
+
+                # Nhận phản hồi từ peer
+                response = peer_sock.recv(4096).decode()
+                peer_sock.close() 
+                
+                if response:
+                    print(f"{peers_hostname} is online!")
+                else:
+                    print(f"{peers_hostname} is offline!")
+        
+            except socket.timeout:
+                print(f"Connection to {peers_hostname} timed out.")
+            except socket.error as e:
+                print(f"Error connecting to {peers_hostname}: {e}")
     else:
-        print("There is no host with that name")
-
-
+        print(f"There is no host with the name {peers_hostname}")
 
 def server_command_shell():
     while True:
@@ -499,15 +437,12 @@ def server_command_shell():
         cmd_parts = cmd_input.split()
         if cmd_parts:
             action = cmd_parts[0]
-            if action == "discover" and len(cmd_parts) == 2:
-                hostname = cmd_parts[1]
-                thread = threading.Thread(target=discover_files, args=(hostname,))
-                thread.start()
-            elif action == "ping" and len(cmd_parts) == 2:
+            if action == "ping" and len(cmd_parts) == 2:
                 hostname = cmd_parts[1]
                 thread = threading.Thread(target=ping_host, args=(hostname,))
                 thread.start()
             elif action == "exit":
+                stop_event.set()
                 break
             else:
                 print("Unknown command or incorrect usage.")
@@ -519,22 +454,21 @@ def start_server(host='0.0.0.0', port=65432):
     log_event("Server started and is listening for connections.")
 
     try:
-        while True:
-            conn, addr = server_socket.accept()
-            # host = server_socket.getsockname()
-            # log_event(f"Accepted connection from {addr}, hostname is {host}")
-            thread = threading.Thread(target=client_handler, args=(conn, addr))
-            thread.start()
-            log_event(f"Active connections: {threading.active_count() - 1}")
+        while not stop_event.is_set():  # Kiểm tra cờ stop_event
+            server_socket.settimeout(1.0) 
+            try:
+                conn, addr = server_socket.accept()
+                thread = threading.Thread(target=client_handler, args=(conn, addr))
+                thread.start()
+                log_event(f"Active connections: {threading.active_count() - 1}")
+            except socket.timeout:
+                continue
     except KeyboardInterrupt:
         log_event("Server shutdown requested.")
     finally:
         # Đóng socket server
         server_socket.close()
-        # Đóng con trỏ và kết nối đến cơ sở dữ liệu MySQL
-        cur.close()
-        conn.close()
-
+        log_event("Server socket closed.")
 
 if __name__ == "__main__":
     # SERVER_HOST = '192.168.56.1'
