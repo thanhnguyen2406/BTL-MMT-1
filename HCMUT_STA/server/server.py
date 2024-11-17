@@ -7,6 +7,7 @@ import mysql.connector
 from mysql.connector import Error
 import sys
 import json
+import time
 
 conn = None
 cur = None
@@ -290,7 +291,6 @@ def client_handler(conn, addr):
             hash_info = hashlib.sha1(f"{file_name}".encode()).hexdigest()
 
             if command.get('action') == 'introduce':
-                # active_connections[peers_hostname] = conn
                 update_client_info_DHT(peers_id, peers_ip, peers_port, peers_hostname) # addr[0] is the IP address
                 log_event(f"Connection established with {peers_hostname}/{peers_ip}:{peers_port})")
 
@@ -310,7 +310,7 @@ def client_handler(conn, addr):
             elif command['action'] == 'list':
                 get_peers_list(conn)
 
-            elif command['action'] == 'upload':
+            elif command['action'] == 'seeding':
                 log_event(f"Upload file info and its piece hash into database with hash_info: {hash_info}")
                 update_client_info_torrentFile(hash_info, file_name, file_size, piece_size, number_of_pieces)   
                 update_hash_info(peers_id, hash_info, "seeder")
@@ -375,26 +375,6 @@ def client_handler(conn, addr):
     finally:
         delete_peer_from_DHT_peers(peers_id, peers_ip, peers_port, peers_hostname)
 
-def request_file_list_from_client(peers_hostname):
-    if peers_hostname in active_connections:
-        conn = active_connections[peers_hostname]
-        print(active_connections[peers_hostname])
-        ip_address, _ = conn.getpeername()
-        # print(ip_address)
-        peer_port = 65433  
-        peer_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        peer_sock.connect((ip_address, peer_port))
-        request = {'action': 'request_file_list'}
-        peer_sock.sendall(json.dumps(request).encode() + b'\n')
-        response = json.loads(peer_sock.recv(4096).decode())
-        peer_sock.close()
-        if 'files' in response:
-            return response['files']
-        else:
-            return "Error: No file list in response"
-    else:
-        return "Error: Client not connected"
-
 def ping_host(peers_hostname):
     # Lấy địa chỉ IP và port từ bảng DHT_peers dựa trên hostname
     cur.execute("SELECT peers_ip, peers_port FROM DHT_peers WHERE peers_hostname = %s", (peers_hostname,))
@@ -431,6 +411,15 @@ def ping_host(peers_hostname):
     else:
         print(f"There is no host with the name {peers_hostname}")
 
+def monitor_connections():
+    while not stop_event.is_set():
+        # Sử dụng active_count() để đếm số thread đang chạy, trừ đi 1 để không tính thread chính
+        active_connections = threading.active_count() - 3  # Trừ thread chính & bản thân nó & thread start server
+        log_event(f"Active connections: {active_connections}")
+
+        # Giám sát tình trạng kết nối
+        time.sleep(30)
+
 def server_command_shell():
     while True:
         cmd_input = input("Server command: ")
@@ -455,12 +444,11 @@ def start_server(host='0.0.0.0', port=65432):
 
     try:
         while not stop_event.is_set():  # Kiểm tra cờ stop_event
-            server_socket.settimeout(1.0) 
+            server_socket.settimeout(1.0)
             try:
                 conn, addr = server_socket.accept()
                 thread = threading.Thread(target=client_handler, args=(conn, addr))
-                thread.start()
-                log_event(f"Active connections: {threading.active_count() - 1}")
+                thread.start()  # Mỗi client sẽ được xử lý trong một thread riêng
             except socket.timeout:
                 continue
     except KeyboardInterrupt:
@@ -474,9 +462,14 @@ if __name__ == "__main__":
     # SERVER_HOST = '192.168.56.1'
     SERVER_PORT = 65432
     SERVER_HOST='0.0.0.0'
+
     # Start server in a separate thread
     server_thread = threading.Thread(target=start_server)
     server_thread.start()
+
+    # Start monitor in a separate thread
+    monitor_thread = threading.Thread(target=monitor_connections)
+    monitor_thread.start()
 
     # Start the server command shell in the main thread
     server_command_shell()

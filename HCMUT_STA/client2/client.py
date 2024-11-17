@@ -103,7 +103,7 @@ def get_password(prompt="Password: "):
 
     return password
 
-def handler_upload_piece(sock, peers_port, file_name, file_size, pieces):
+def handler_seeding_piece(sock, peers_port, file_name, file_size, pieces):
     pieces_hash = create_pieces_string(pieces)
     num_order_in_file = [str(i) for i in range(1, len(pieces) + 1)]
     piece_hash=[]
@@ -112,7 +112,7 @@ def handler_upload_piece(sock, peers_port, file_name, file_size, pieces):
         index = pieces.index(f"{file_name}_piece{i}")
         piece_hash.append(pieces_hash[index])
         print (f"Piece number {i} : {pieces_hash[index]}")
-    upload_piece_file(sock,peers_port,file_name, file_size, piece_hash, num_order_in_file)
+    seeding_piece_file(sock,peers_port,file_name, file_size, piece_hash, num_order_in_file)
 
 
 def handler_list_peers(sock, peers_port):
@@ -147,11 +147,11 @@ def handler_list_peers(sock, peers_port):
     except Exception as e:
         print(f"Error in handler_list_peers: {e}")
 
-def upload_piece_file(sock,peers_port,file_name, file_size, piece_hash, num_order_in_file):
+def seeding_piece_file(sock,peers_port,file_name, file_size, piece_hash, num_order_in_file):
     global peers_id
     peers_hostname = socket.gethostname()
     command = {
-        "action": "upload",
+        "action": "seeding",
         "peers_id": peers_id,
         "peers_port": peers_port,
         "peers_hostname":peers_hostname,
@@ -220,6 +220,40 @@ def request_piece_from_peer(peers_ip, peer_port, file_name, num_order_in_file=No
     finally:
         peer_sock.close()
 
+def get_piece_info_thread(peer_info, file_name, piece_availability, lock):
+    try:
+        # Gửi yêu cầu đến peer để lấy thông tin các mảnh
+        peer_pieces = request_piece_from_peer(peer_info['peers_ip'], peer_info['peers_port'], file_name)
+        
+        # Cập nhật thông tin mảnh vào piece_availability dưới sự bảo vệ của lock
+        with lock:
+            for piece in peer_pieces:
+                if piece not in piece_availability:
+                    piece_availability[piece] = []
+                piece_availability[piece].append(peer_info)
+    except Exception as e:
+        print(f"Error from getting information from peer {peer_info['peers_hostname']}: {e}")
+
+def download_piece_thread(piece, peers_holding_piece, pieces_downloaded, lock, file_name):
+    for peer_info in peers_holding_piece:
+        try:
+            with lock:
+                pieces_downloaded.add(piece)
+
+            print(f"Đang tải piece {piece} từ peer {peer_info['peers_hostname']}...")
+            success = request_piece_from_peer(
+                peer_info['peers_ip'],
+                peer_info['peers_port'],
+                file_name,
+                piece
+            )
+
+            if success:
+                print(f"Đã tải thành công piece {piece}")
+                return
+        except Exception as e:
+            print(f"Lỗi khi tải piece {piece} từ peer {peer_info['peers_hostname']}: {e}")
+
 def handler_download_file(sock,peers_port,file_name, piece_hash, num_order_in_file):
     global peers_id
     peers_hostname = socket.gethostname()
@@ -246,47 +280,45 @@ def handler_download_file(sock,peers_port,file_name, piece_hash, num_order_in_fi
     if isinstance(active_peers, list):
         # Vòng lặp 1: Kết nối đến các peer để lấy thông tin các piece
         piece_availability = {}  # Map lưu thông tin piece -> danh sách peer nắm giữ piece
+        lock = threading.Lock()  # Lock cho đồng bộ hóa
+
+        threads = []  # Danh sách để chứa các thread
         for peer_info in active_peers:
-            try:
-                peer_pieces = request_piece_from_peer(peer_info['peers_ip'], peer_info['peers_port'], file_name)
-                for piece in peer_pieces:
-                    if piece not in piece_availability:
-                        piece_availability[piece] = []
-                    piece_availability[piece].append(peer_info)
-            except Exception as e:
-                print(f"Error from getting information from peer {peer_info['peers_hostname']}: {e}")
+            # Tạo một thread cho mỗi peer để lấy thông tin các mảnh song song
+            thread = threading.Thread(target=get_piece_info_thread, args=(peer_info, file_name, piece_availability, lock))
+            threads.append(thread)
+            thread.start()
+
+        # Đảm bảo rằng tất cả các thread đã hoàn thành
+        for thread in threads:
+            thread.join()
 
         # Sắp xếp các piece theo "rarest piece first"
         sorted_pieces = sorted(piece_availability.items(), key=lambda x: len(x[1]))
-        print(f"sorted pieces {sorted_pieces}")
-        # Vòng lặp 2: Tải các piece theo thứ tự đã sắp xếp
         pieces_downloaded = set()
+
+        # Vòng lặp 2: Tải các piece theo thứ tự đã sắp xếp
+        download_threads = []  # Danh sách để chứa các thread tải piece
         for piece, peers_holding_piece in sorted_pieces:
             if piece in pieces_downloaded:
                 continue
+            
+            # Tạo và khởi chạy một thread cho mỗi mảnh
+            thread = threading.Thread(target=download_piece_thread, args=(piece, peers_holding_piece, pieces_downloaded, lock, file_name))
+            download_threads.append(thread)
+            thread.start()
 
-            for peer_info in peers_holding_piece:
-                try:
-                    print(f"Đang tải piece {piece} từ peer {peer_info['peers_hostname']}...")
-                    success = request_piece_from_peer(
-                        peer_info['peers_ip'],
-                        peer_info['peers_port'],
-                        file_name,
-                        piece
-                    )
-                    if success:
-                        pieces_downloaded.add(piece)
-                        break  # Chuyển sang piece tiếp theo nếu tải thành công
-                except Exception as e:
-                    print(f"Lỗi khi tải piece {piece} từ peer {peer_info['peers_hostname']}: {e}")
+        # Chờ tất cả các thread hoàn thành
+        for thread in download_threads:
+            thread.join()
 
-            # Kiểm tra nếu đã tải đủ tất cả các piece
-            if len(pieces_downloaded) == number_of_pieces:
+        # Sau khi tất cả các mảnh đã được tải về, thực hiện gộp các mảnh lại
+        if len(pieces_downloaded) == number_of_pieces:
                 merge_pieces_into_file(check_local_piece_files(file_name), file_name)
                 print(f"Đã tải đủ các piece và hoàn thành file: {file_name}")
                 handler_update_peer_seeder(sock, peers_port, file_name)
-                return
-
+                return 
+        
         # Nếu không đủ piece sau khi thử tất cả các peer
         print("Đã tải từ tất cả các peer nhưng vẫn chưa đủ các piece.")
     else:
@@ -458,20 +490,20 @@ def main(server_host, server_port, peers_port):
 
     try:
         while True:
-            user_input = input("Enter command (upload file_name/ download file_name/ tracker file_name/ list/ exit): ")#addr[0],peers_port, peers_hostname,file_name, piece_hash,num_order_in_file
+            user_input = input("Enter command (seeding file_name/ download file_name/ tracker file_name/ list/ exit): ")#addr[0],peers_port, peers_hostname,file_name, piece_hash,num_order_in_file
             command_parts = shlex.split(user_input)
             if len(command_parts) == 1 and command_parts[0].lower() == 'list':
                 handler_list_peers(sock, peers_port)
 
-            elif len(command_parts) == 2 and command_parts[0].lower() == 'upload':
+            elif len(command_parts) == 2 and command_parts[0].lower() == 'seeding':
                 _,file_name = command_parts
                 if check_local_files(file_name):
                     piece_size = 524288  # 524288 byte = 512KB
                     file_size = os.path.getsize(file_name)
                     pieces = split_file_into_pieces(file_name,piece_size)
-                    handler_upload_piece(sock, peers_port, file_name, file_size, pieces)
+                    handler_seeding_piece(sock, peers_port, file_name, file_size, pieces)
                 elif (pieces := check_local_piece_files(file_name)):
-                    handler_upload_piece(sock, peers_port, pieces, file_name)
+                    handler_seeding_piece(sock, peers_port, pieces, file_name)
                 else:
                     print(f"Local file {file_name}/piece does not exist.")
 
@@ -506,7 +538,7 @@ def main(server_host, server_port, peers_port):
 
 if __name__ == "__main__":
     # Replace with your server's IP address and port number
-    SERVER_HOST = '192.168.1.8'
+    SERVER_HOST = '192.168.1.7'
     SERVER_PORT = 65432
     CLIENT_PORT = 65434
     main(SERVER_HOST, SERVER_PORT,CLIENT_PORT)
