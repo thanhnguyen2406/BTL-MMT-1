@@ -390,59 +390,59 @@ def handler_tracker_file(sock, file_name, peers_port):
     response = json.loads(sock.recv(4096).decode())
     print(response)
 
-def authenticate_user(sock):
-    global peers_id
-    peers_hostname = socket.gethostname()
-    while True:
-        # Hiển thị tùy chọn cho người dùng
-        action = input("Do you have an account? (login/register/exit): ").strip().lower()
+# def authenticate_user(sock):
+#     global peers_id
+#     peers_hostname = socket.gethostname()
+#     while True:
+#         # Hiển thị tùy chọn cho người dùng
+#         action = input("Do you have an account? (login/register/exit): ").strip().lower()
         
-        if action == 'login':
-            username = input("Username: ").strip()
-            password = get_password()
-            password_hash = hashlib.sha256(password.encode()).hexdigest()
+#         if action == 'login':
+#             username = input("Username: ").strip()
+#             password = get_password()
+#             password_hash = hashlib.sha256(password.encode()).hexdigest()
 
-            # Gửi yêu cầu đăng nhập tới server
-            command = {
-                "action": "login",
-                "peers_id" : peers_id,
-                "peers_hostname":peers_hostname,
-                "username":username,
-                "password_hash":password_hash
-            }
-            sock.sendall(json.dumps(command).encode() + b'\n')
-            response = json.loads(sock.recv(4096).decode())
+#             # Gửi yêu cầu đăng nhập tới server
+#             command = {
+#                 "action": "login",
+#                 "peers_id" : peers_id,
+#                 "peers_hostname":peers_hostname,
+#                 "username":username,
+#                 "password_hash":password_hash
+#             }
+#             sock.sendall(json.dumps(command).encode() + b'\n')
+#             response = json.loads(sock.recv(4096).decode())
             
-            if response.get("status") == "success":
-                print("==== Log in successfully ====")
-                return True
-            else:
-                print("Fail to log in. Please try again.")
+#             if response.get("status") == "success":
+#                 print("==== Log in successfully ====")
+#                 return True
+#             else:
+#                 print("Fail to log in. Please try again.")
         
-        elif action == 'register':
-            username = input("Username: ").strip()
-            password = input("Password: ").strip()
-            password_hash = hashlib.sha256(password.encode()).hexdigest()
+#         elif action == 'register':
+#             username = input("Username: ").strip()
+#             password = input("Password: ").strip()
+#             password_hash = hashlib.sha256(password.encode()).hexdigest()
 
-            # Gửi yêu cầu tạo tài khoản tới server
-            command = {
-                "action": "register",
-                "peers_id" : peers_id,
-                "peers_hostname":peers_hostname,
-                "username":username,
-                "password_hash":password_hash
-            }
-            sock.sendall(json.dumps(command).encode() + b'\n')
-            response = json.loads(sock.recv(4096).decode())
+#             # Gửi yêu cầu tạo tài khoản tới server
+#             command = {
+#                 "action": "register",
+#                 "peers_id" : peers_id,
+#                 "peers_hostname":peers_hostname,
+#                 "username":username,
+#                 "password_hash":password_hash
+#             }
+#             sock.sendall(json.dumps(command).encode() + b'\n')
+#             response = json.loads(sock.recv(4096).decode())
             
-            if response.get("status") == "success":
-                print("Create account successfully! You can log in now.")
-            else:
-                print("Fail to create account. Username has been exist.")
-        elif action == 'exit':
-            return False
-        else:
-            print("Invalid command.")
+#             if response.get("status") == "success":
+#                 print("Create account successfully! You can log in now.")
+#             else:
+#                 print("Fail to create account. Username has been exist.")
+#         elif action == 'exit':
+#             return False
+#         else:
+#             print("Invalid command.")
 
 def connect_to_server(server_host, server_port, peers_port):
     global peers_id
@@ -481,12 +481,12 @@ def main(server_host, server_port, peers_port):
     # Connect to the server
     sock = connect_to_server(server_host, server_port, peers_port)
 
-    if not authenticate_user(sock):
-        print("Authentication failed. Exiting...")
-        stop_event.set()  # Báo hiệu dừng luồng
-        host_service_thread.join(timeout=5)  # Đợi luồng phụ dừng
-        sock.close()
-        return
+    # if not authenticate_user(sock):
+    #     print("Authentication failed. Exiting...")
+    #     stop_event.set()  # Báo hiệu dừng luồng
+    #     host_service_thread.join(timeout=5)  # Đợi luồng phụ dừng
+    #     sock.close()
+    #     return
 
     try:
         while True:
@@ -538,7 +538,7 @@ def main(server_host, server_port, peers_port):
 
 if __name__ == "__main__":
     # Replace with your server's IP address and port number
-    SERVER_HOST = '192.168.1.7'
+    SERVER_HOST = '192.168.1.131'
     SERVER_PORT = 65432
     CLIENT_PORT = 65434
     main(SERVER_HOST, SERVER_PORT,CLIENT_PORT)

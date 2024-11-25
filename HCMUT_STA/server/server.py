@@ -39,34 +39,34 @@ def log_event(message):
 def xor_distance(id1, id2):
     return int(id1, 16) ^ int(id2, 16)
 
-def create_user(username, password):
-    # Kiểm tra nếu tên đăng nhập đã tồn tại
-    cur.execute("SELECT username FROM users WHERE username = %s", (username,))
-    if cur.fetchone():
-        return False  # Nếu tên đăng nhập đã tồn tại, trả về False
+# def create_user(username, password):
+#     # Kiểm tra nếu tên đăng nhập đã tồn tại
+#     cur.execute("SELECT username FROM users WHERE username = %s", (username,))
+#     if cur.fetchone():
+#         return False  # Nếu tên đăng nhập đã tồn tại, trả về False
 
-    # Mã hóa mật khẩu bằng SHA256
-    password_hash = hashlib.sha256(password.encode()).hexdigest()
+#     # Mã hóa mật khẩu bằng SHA256
+#     password_hash = hashlib.sha256(password.encode()).hexdigest()
 
-    # Thêm người dùng mới vào cơ sở dữ liệu
-    cur.execute("""
-            INSERT IGNORE INTO users (username, password_hash)
-            VALUES (%s, %s)
-        """, (username, password_hash))
+#     # Thêm người dùng mới vào cơ sở dữ liệu
+#     cur.execute("""
+#             INSERT IGNORE INTO users (username, password_hash)
+#             VALUES (%s, %s)
+#         """, (username, password_hash))
 
-    return True
+#     return True
 
-def verify_user(username, password):
-    # Lấy thông tin người dùng từ cơ sở dữ liệu
-    cur.execute("SELECT password_hash FROM users WHERE username = %s", (username,))
-    row = cur.fetchone()
+# def verify_user(username, password):
+#     # Lấy thông tin người dùng từ cơ sở dữ liệu
+#     cur.execute("SELECT password_hash FROM users WHERE username = %s", (username,))
+#     row = cur.fetchone()
 
-    if row:
-        stored_password_hash = row[0]
-        # So sánh mật khẩu đã băm
-        return stored_password_hash == hashlib.sha256(password.encode()).hexdigest()
-    else:
-        return False
+#     if row:
+#         stored_password_hash = row[0]
+#         # So sánh mật khẩu đã băm
+#         return stored_password_hash == hashlib.sha256(password.encode()).hexdigest()
+#     else:
+#         return False
 
 def get_peers_list(conn):
     try:
@@ -294,12 +294,12 @@ def client_handler(conn, addr):
                 update_client_info_DHT(peers_id, peers_ip, peers_port, peers_hostname) # addr[0] is the IP address
                 log_event(f"Connection established with {peers_hostname}/{peers_ip}:{peers_port})")
 
-            elif command['action'] == 'login':
-                if verify_user(username, password_hash):
-                    response = {"status": "success", "message": "Đăng nhập thành công"}
-                else:
-                    response = {"status": "fail", "message": "Tên đăng nhập hoặc mật khẩu sai"}
-                conn.sendall(json.dumps(response).encode())
+            # elif command['action'] == 'login':
+            #     if verify_user(username, password_hash):
+            #         response = {"status": "success", "message": "Đăng nhập thành công"}
+            #     else:
+            #         response = {"status": "fail", "message": "Tên đăng nhập hoặc mật khẩu sai"}
+            #     conn.sendall(json.dumps(response).encode())
             elif command['action'] == 'register':
                 if create_user(username, password_hash):
                     response = {"status": "success", "message": "Tạo tài khoản thành công"}
