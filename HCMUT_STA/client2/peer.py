@@ -202,7 +202,7 @@ def request_piece_from_peer(peers_ip, peer_port, file_name, num_order_in_file=No
                     if not data:
                         break
                     f.write(data)
-            print(f"Tải thành công: {file_name}_piece{num_order_in_file}")
+            print(f"Download successfully: {file_name}_piece{num_order_in_file}")
 
             return f"{file_name}_piece{num_order_in_file}"
 
@@ -240,7 +240,7 @@ def download_piece_thread(piece, peers_holding_piece, pieces_downloaded, lock, f
             with lock:
                 pieces_downloaded.add(piece)
 
-            print(f"Đang tải piece {piece} từ peer {peer_info['peers_hostname']}...")
+            print(f"Downloading piece {piece} from peer {peer_info['peers_hostname']}...")
             success = request_piece_from_peer(
                 peer_info['peers_ip'],
                 peer_info['peers_port'],
@@ -249,10 +249,9 @@ def download_piece_thread(piece, peers_holding_piece, pieces_downloaded, lock, f
             )
 
             if success:
-                print(f"Đã tải thành công piece {piece}")
                 return
         except Exception as e:
-            print(f"Lỗi khi tải piece {piece} từ peer {peer_info['peers_hostname']}: {e}")
+            print(f"Error while downloading piece {piece} from peer {peer_info['peers_hostname']}: {e}")
 
 def handler_download_file(sock,peers_port,file_name, piece_hash, num_order_in_file):
     global peers_id
@@ -315,12 +314,12 @@ def handler_download_file(sock,peers_port,file_name, piece_hash, num_order_in_fi
         # Sau khi tất cả các mảnh đã được tải về, thực hiện gộp các mảnh lại
         if len(pieces_downloaded) == number_of_pieces:
                 merge_pieces_into_file(check_local_piece_files(file_name), file_name)
-                print(f"Đã tải đủ các piece và hoàn thành file: {file_name}")
+                print(f"Number of piece is enough and file has been combined: {file_name}")
                 handler_update_peer_seeder(sock, peers_port, file_name)
                 return 
         
         # Nếu không đủ piece sau khi thử tất cả các peer
-        print("Đã tải từ tất cả các peer nhưng vẫn chưa đủ các piece.")
+        print("Already downloaded from all peers but number of piece is not enough.")
     else:
         print("Not found any host with file {file_name}")
 
@@ -349,7 +348,7 @@ def handler_request(conn, shared_files_dir):
                         num_order_in_file = int(filename.split("_piece")[-1])
                         pieces.append(num_order_in_file)
                     except ValueError:
-                        print(f"Lỗi phân tích tên file: {filename}")
+                        print(f"Error of analysing file's name: {filename}")
 
             response = {"pieces": pieces}
             conn.sendall(json.dumps(response).encode())
@@ -362,7 +361,7 @@ def handler_request(conn, shared_files_dir):
             if os.path.exists(file_path):
                 send_piece_to_client(conn, file_path)
             else:
-                print(f"Không tìm thấy file: {file_path}")
+                print(f"File not found: {file_path}")
         
         elif command["action"] == "ping":
             print("\nPing request received, responding with pong...")
@@ -370,7 +369,7 @@ def handler_request(conn, shared_files_dir):
             conn.sendall(json.dumps(response).encode())
 
     except Exception as e:
-        print(f"Lỗi trong handler_request: {e}")
+        print(f"Error in handler_request: {e}")
     finally:
         conn.close()
 
@@ -540,5 +539,5 @@ if __name__ == "__main__":
     # Replace with your server's IP address and port number
     SERVER_HOST = '192.168.1.131'
     SERVER_PORT = 65432
-    CLIENT_PORT = 65435
+    CLIENT_PORT = 65434
     main(SERVER_HOST, SERVER_PORT,CLIENT_PORT)

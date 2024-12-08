@@ -1,10 +1,16 @@
-CREATE TABLE peers (
-    peers_ip VARCHAR(255),
-    peers_port VARCHAR(255),
+CREATE TABLE DHT_peers (
+    peer_id VARCHAR(50) PRIMARY KEY,
+    peers_ip VARCHAR(50),
+    peers_port INT,
     peers_hostname VARCHAR(255),
-    file_name VARCHAR(255),
-    file_size VARCHAR(255),
-    piece_hash VARCHAR(255),
-    piece_size VARCHAR(255),
-    num_order_in_file VARCHAR(255)
+    hash_info JSON
+);
+
+CREATE TABLE torrent_file (
+    hash_info CHAR(40) PRIMARY KEY,  -- SHA-1 hash có độ dài 40 ký tự
+    file_name VARCHAR(255) NOT NULL,
+    file_size BIGINT NOT NULL,       -- Sử dụng BIGINT để hỗ trợ các file lớn
+    piece_size INT NOT NULL,
+    number_of_pieces INT NOT NULL,
+    download_count INT DEFAULT 0
 );
