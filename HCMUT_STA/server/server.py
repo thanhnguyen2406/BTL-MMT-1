@@ -30,7 +30,7 @@ try:
         # Thực hiện các truy vấn SQL ở đây
 
 except Error as e:
-    print("Không thể kết nối đến cơ sở dữ liệu.")
+    print("Can't connect to the database.")
     print(e)
 
 def log_event(message):
@@ -143,7 +143,7 @@ def update_client_info_torrentFile(hash_info, file_name, file_size, piece_size, 
         conn.commit()
 
     except mysql.connector.Error as e:
-        print(f"Error in update_client_info_torrentFile: {e}")
+        (f"Error in update_client_info_torrentFile: {e}")
         conn.rollback()
 
 def update_hash_info(peers_id, new_hash_info, role):
@@ -182,7 +182,7 @@ def update_hash_info(peers_id, new_hash_info, role):
         
         # Commit các thay đổi
         conn.commit()
-        print(f"Hash info đã được cập nhật cho peer_id: {peers_id}")
+        print(f"Hash info has been updated for peer_id: {peers_id}")
 
     except mysql.connector.Error as e:
         print(f"Error in update_hash_info: {e}")
@@ -199,7 +199,7 @@ def update_download_count(hash_info):
         
         # Xác nhận thay đổi vào cơ sở dữ liệu
         conn.commit()
-        print(f"Lượt tải đã được cập nhật cho hash_info: {hash_info}")
+        print(f"Download has been counted for hash_info: {hash_info}")
 
     except mysql.connector.Error as e:
         print(f"Error in update_download_count: {e}")
@@ -360,7 +360,7 @@ def client_handler(conn, addr):
                         }           
                         # Gửi thông tin peer đã sắp xếp cho client
                         conn.sendall(json.dumps(response_data).encode())
-                        print(f"Đã gửi danh sách peer cho client với hash_info: {hash_info}")
+                        print(f"Peer list has been send to client with hash_info: {hash_info}")
                     else:
                         # Không tìm thấy peer nào với hash_info yêu cầu
                         conn.sendall(json.dumps({'error': 'No peers found for the specified hash_info'}).encode())
