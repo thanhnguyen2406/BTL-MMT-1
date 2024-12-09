@@ -41,7 +41,7 @@ CREATE TABLE torrent_file (
 2. Start the central server:
    - $ cd server
    - Config server.py file to connect to database
-   ```
+   ```python
    conn = mysql.connector.connect(
         host="localhost",        
         database="sta_server", 
